@@ -12,6 +12,7 @@ function decodeJwt(token) {
 export function useAuth() {
   const [token, setToken] = useState(null)
   const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     // Read token from URL param first, then localStorage
@@ -20,7 +21,6 @@ export function useAuth() {
 
     if (urlToken) {
       localStorage.setItem('turing_token', urlToken)
-      // Clean token from URL without reload
       const cleanUrl = window.location.pathname
       window.history.replaceState({}, '', cleanUrl)
       setToken(urlToken)
@@ -32,6 +32,7 @@ export function useAuth() {
         setUser(decodeJwt(stored))
       }
     }
+    setLoading(false)
   }, [])
 
   function logout() {
@@ -40,5 +41,5 @@ export function useAuth() {
     setUser(null)
   }
 
-  return { token, user, logout }
+  return { token, user, loading, logout }
 }
