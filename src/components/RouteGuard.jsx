@@ -10,7 +10,7 @@ export default function RouteGuard({ children, requireAdmin = false }) {
     return <Navigate to="/unauthorized" replace />
   }
 
-  if (requireAdmin && user.role !== 'admin' && user.role !== 'administrador') {
+  if (requireAdmin && user.role !== 'admin' && user.role !== 'administrador' && user.role !== 'superadmin') {
     return <Navigate to="/unauthorized" replace />
   }
 
