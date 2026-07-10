@@ -7,6 +7,7 @@ import UsersPage from '@/pages/admin/Users'
 import TenantsPage from '@/pages/admin/Tenants'
 import RolesPage from '@/pages/admin/Roles'
 import MembershipsPage from '@/pages/admin/Memberships'
+import RequestsPage from '@/pages/admin/Requests'
 
 export default function App() {
   return (
@@ -22,7 +23,8 @@ export default function App() {
             </RouteGuard>
           }
         >
-          <Route index element={<Navigate to="users" replace />} />
+          <Route index element={<Navigate to="requests" replace />} />
+          <Route path="requests"    element={<RequestsPage />} />
           <Route path="users"       element={<UsersPage />} />
           <Route path="tenants"     element={<TenantsPage />} />
           <Route path="roles"       element={<RolesPage />} />

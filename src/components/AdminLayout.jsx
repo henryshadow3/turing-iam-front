@@ -1,11 +1,12 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Users, Building2, Shield, Link2, LogOut, ChevronRight, ChevronDown } from 'lucide-react'
+import { Users, Building2, Shield, Link2, Inbox, LogOut, ChevronRight, ChevronDown } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import GlimmerBackground from './GlimmerBackground'
 import { getRankByRole, RankedAvatar } from './RankIcons'
 import { useState } from 'react'
 
 const navItems = [
+  { to: '/admin/requests',    label: 'Solicitudes',    icon: Inbox,     description: 'Accesos pendientes' },
   { to: '/admin/users',       label: 'Usuarios',       icon: Users,     description: 'Gestión de cuentas' },
   { to: '/admin/tenants',     label: 'Organizaciones', icon: Building2, description: 'Tenants del sistema' },
   { to: '/admin/roles',       label: 'Roles',          icon: Shield,    description: 'Permisos y accesos' },
@@ -13,6 +14,7 @@ const navItems = [
 ]
 
 const BREADCRUMBS = {
+  '/admin/requests':    'Solicitudes',
   '/admin/users':       'Usuarios',
   '/admin/tenants':     'Organizaciones',
   '/admin/roles':       'Roles',
