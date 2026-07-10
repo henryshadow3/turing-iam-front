@@ -10,7 +10,10 @@ export default function RouteGuard({ children, requireAdmin = false }) {
     return <Navigate to="/unauthorized" replace />
   }
 
-  if (requireAdmin && user.role !== 'admin' && user.role !== 'administrador' && user.role !== 'superadmin') {
+  // El IAM es de plataforma: solo entra el superadmin de TURING.
+  // user.role ahora es el rol del tenant activo — ser admin de un tenant
+  // NO da acceso al IAM.
+  if (requireAdmin && user.platform_role !== 'superadmin') {
     return <Navigate to="/unauthorized" replace />
   }
 
