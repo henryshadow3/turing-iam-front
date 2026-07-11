@@ -3,7 +3,8 @@ import { Users, Building2, Shield, Link2, Inbox, LogOut, ChevronRight, ChevronDo
 import { useAuth } from '@/hooks/useAuth'
 import GlimmerBackground from './GlimmerBackground'
 import { getRankByRole, RankedAvatar } from './RankIcons'
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { callAction } from '@/api/client'
 
 const navItems = [
   { to: '/admin/requests',    label: 'Solicitudes',    icon: Inbox,     description: 'Accesos pendientes' },
@@ -49,10 +50,30 @@ function TuringMark({ size = 28 }) {
 }
 
 export default function AdminLayout() {
-  const { user, logout } = useAuth()
+  const { user, logout, token } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [pendingCount, setPendingCount] = useState(0)
+
+  const fetchPendingCount = useCallback(async () => {
+    if (!token) return
+    try {
+      const data = await callAction('iam.request.list.in', { status: 'pending' }, token)
+      setPendingCount(data?.requests?.length ?? 0)
+    } catch {}
+  }, [token])
+
+  useEffect(() => {
+    fetchPendingCount()
+    const interval = setInterval(fetchPendingCount, 30000)
+    // Refresca inmediatamente cuando Requests.jsx resuelve una solicitud
+    window.addEventListener('requests-updated', fetchPendingCount)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('requests-updated', fetchPendingCount)
+    }
+  }, [fetchPendingCount])
 
   function handleLogout() {
     logout()
@@ -107,35 +128,57 @@ export default function AdminLayout() {
              style={{ color: '#2a2a2a' }}>
             Administración
           </p>
-          {navItems.map(({ to, label, icon: Icon, description }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className={({ isActive }) =>
-                `group flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm border transition-all duration-200 ` +
-                (isActive ? 'nav-item-active' : 'nav-item-inactive border-transparent')
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 ${isActive ? 'nav-icon-active' : 'nav-icon-inactive'}`}>
-                    <Icon className="w-3.5 h-3.5" style={{ color: isActive ? '#D4AF37' : undefined }} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium leading-none">{label}</p>
-                    <p className="text-[10px] mt-0.5 leading-none truncate font-mono"
-                       style={{ color: isActive ? 'rgba(212,175,55,0.55)' : '#374151' }}>
-                      {description}
-                    </p>
-                  </div>
-                  {isActive && (
-                    <div className="w-0.5 h-5 rounded-full shrink-0"
-                         style={{ background: 'linear-gradient(180deg, rgba(212,175,55,0.9), rgba(192,192,192,0.5))' }} />
-                  )}
-                </>
-              )}
-            </NavLink>
-          ))}
+          {navItems.map(({ to, label, icon: Icon, description }) => {
+            const isRequests = to === '/admin/requests'
+            const showBadge  = isRequests && pendingCount > 0
+            return (
+              <NavLink
+                key={to}
+                to={to}
+                className={({ isActive }) =>
+                  `group flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm border transition-all duration-200 ` +
+                  (isActive ? 'nav-item-active' : 'nav-item-inactive border-transparent')
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    {/* Icon with notification badge */}
+                    <div className="relative shrink-0">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200 ${isActive ? 'nav-icon-active' : 'nav-icon-inactive'}`}>
+                        <Icon className="w-3.5 h-3.5" style={{ color: isActive ? '#D4AF37' : undefined }} />
+                      </div>
+                      {showBadge && (
+                        <span
+                          className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full
+                                     flex items-center justify-center text-[10px] font-bold text-white
+                                     animate-pulse"
+                          style={{
+                            background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                            boxShadow: '0 0 8px rgba(239,68,68,0.7)',
+                            lineHeight: 1,
+                          }}
+                        >
+                          {pendingCount > 9 ? '9+' : pendingCount}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium leading-none">{label}</p>
+                      <p className="text-[10px] mt-0.5 leading-none truncate font-mono"
+                         style={{ color: isActive ? 'rgba(212,175,55,0.55)' : '#374151' }}>
+                        {description}
+                      </p>
+                    </div>
+                    {isActive && (
+                      <div className="w-0.5 h-5 rounded-full shrink-0"
+                           style={{ background: 'linear-gradient(180deg, rgba(212,175,55,0.9), rgba(192,192,192,0.5))' }} />
+                    )}
+                  </>
+                )}
+              </NavLink>
+            )
+          })}
         </nav>
 
         {/* Silver divider */}

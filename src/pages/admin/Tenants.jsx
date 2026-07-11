@@ -34,7 +34,7 @@ export default function TenantsPage() {
     }
   }
 
-  useEffect(() => { fetchTenants() }, [token])
+  useEffect(() => { if (token) fetchTenants() }, [token])
 
   async function handleCreate(e) {
     e.preventDefault()

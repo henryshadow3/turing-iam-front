@@ -39,7 +39,7 @@ export default function RolesPage() {
     }
   }
 
-  useEffect(() => { fetchAll() }, [token])
+  useEffect(() => { if (token) fetchAll() }, [token])
 
   async function handleCreate(e) {
     e.preventDefault()

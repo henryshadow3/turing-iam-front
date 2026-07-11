@@ -110,7 +110,7 @@ export default function UsersPage() {
     }
   }
 
-  useEffect(() => { fetchUsers() }, [token])
+  useEffect(() => { if (token) fetchUsers() }, [token])
 
   async function handleCreate(e) {
     e.preventDefault()

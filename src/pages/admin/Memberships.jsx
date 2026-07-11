@@ -91,7 +91,7 @@ export default function MembershipsPage() {
     finally { setLoading(false) }
   }
 
-  useEffect(() => { fetchAll() }, [token])
+  useEffect(() => { if (token) fetchAll() }, [token])
 
   const filteredRoles = roles.filter(r => !form.tenant_id || r.tenant_id === form.tenant_id)
 

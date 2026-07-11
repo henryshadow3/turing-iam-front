@@ -34,15 +34,16 @@ export default function RequestsPage() {
       const reqs = rqData?.requests || []
       setRequests(reqs)
       setRoles(rlData?.roles || [])
-      // prellenar la elección de rol con el sugerido de cada solicitud
       setRoleChoice(Object.fromEntries(
         reqs.map(r => [r.id, r.requested_role_id || ''])
       ))
+      // Notifica al layout para que refresque el badge
+      window.dispatchEvent(new CustomEvent('requests-updated'))
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }
 
-  useEffect(() => { fetchAll() }, [token])
+  useEffect(() => { if (token) fetchAll() }, [token])
 
   async function handleApprove(req) {
     const roleId = roleChoice[req.id] || req.requested_role_id
