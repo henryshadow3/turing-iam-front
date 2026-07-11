@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Users, Building2, Shield, Link2, Inbox, LogOut, ChevronRight, ChevronDown } from 'lucide-react'
+import { Users, Building2, Shield, Link2, Inbox, LogOut, ChevronRight, Menu, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import GlimmerBackground from './GlimmerBackground'
 import { getRankByRole, RankedAvatar } from './RankIcons'
@@ -53,8 +53,21 @@ export default function AdminLayout() {
   const { user, logout, token } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Desktop: sidebar colapsada a solo iconos (se recuerda entre sesiones).
+  // Móvil: drawer off-canvas con backdrop.
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('iam_sidebar_collapsed') === '1')
+  const [mobileOpen, setMobileOpen] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
+
+  function toggleCollapsed() {
+    setCollapsed(prev => {
+      localStorage.setItem('iam_sidebar_collapsed', prev ? '0' : '1')
+      return !prev
+    })
+  }
+
+  // Al navegar en móvil, cerrar el drawer
+  useEffect(() => { setMobileOpen(false) }, [location.pathname])
 
   const fetchPendingCount = useCallback(async () => {
     if (!token) return
@@ -95,22 +108,39 @@ export default function AdminLayout() {
       <div className="fixed top-1/2 left-0 w-[20vw] h-[20vw] rounded-full pointer-events-none -z-10 animate-pulse-slow"
            style={{ background: 'rgba(212,175,55,0.03)', filter: 'blur(100px)', animationDelay: '-4s' }} />
 
-      {/* Sidebar */}
-      <aside className="relative z-10 flex flex-col w-64 min-h-screen shrink-0 border-r sidebar-bg"
-             style={{ borderRightColor: 'rgba(212,175,55,0.12)' }}>
+      {/* Backdrop del drawer en móvil */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-30 md:hidden backdrop-blur-sm"
+          style={{ background: 'rgba(0,0,0,0.7)' }}
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      {/* Sidebar: drawer off-canvas en móvil, colapsable en desktop */}
+      <aside
+        className={
+          `z-40 flex flex-col border-r sidebar-bg transition-all duration-300 ` +
+          `fixed inset-y-0 left-0 w-64 md:static md:min-h-screen md:shrink-0 md:translate-x-0 ` +
+          `${mobileOpen ? 'translate-x-0' : '-translate-x-full'} ` +
+          `${collapsed ? 'md:w-[76px]' : 'md:w-64'}`
+        }
+        style={{ borderRightColor: 'rgba(212,175,55,0.12)' }}
+      >
 
         {/* Top gold line */}
         <div className="absolute top-0 left-6 right-6 divider-gold opacity-60" />
 
         {/* Logo */}
-        <div className="px-5 py-6" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-          <div className="flex items-center gap-3">
-            <div className="relative">
+        <div className={`py-6 ${collapsed ? 'md:px-0 md:flex md:justify-center' : ''} px-5`}
+             style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+          <div className={`flex items-center gap-3 ${collapsed ? 'md:gap-0 md:justify-center' : ''}`}>
+            <div className="relative shrink-0">
               <TuringMark size={34} />
               <div className="absolute inset-0 rounded-full blur-lg opacity-30"
                    style={{ background: 'radial-gradient(circle, rgba(212,175,55,0.6) 0%, transparent 70%)' }} />
             </div>
-            <div>
+            <div className={collapsed ? 'md:hidden' : ''}>
               <div className="font-serif text-sm leading-none tracking-wider" style={{ color: '#D4AF37' }}>
                 <span className="text-glow-gold">Turing</span>{' '}
                 <span style={{ color: '#C0C0C0', textShadow: '0 0 12px rgba(192,192,192,0.4)' }}>IAM</span>
@@ -119,12 +149,21 @@ export default function AdminLayout() {
                 Identity &amp; Access Management
               </p>
             </div>
+            {/* Cerrar drawer (solo móvil) */}
+            <button
+              onClick={() => setMobileOpen(false)}
+              className="ml-auto md:hidden w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
+              style={{ color: '#4b5563' }}
+              aria-label="Cerrar menú"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-3 py-5 space-y-0.5">
-          <p className="px-3 pb-3 text-[9px] font-mono font-semibold uppercase tracking-[0.15em]"
+        <nav className={`flex-1 py-5 space-y-0.5 ${collapsed ? 'md:px-2' : ''} px-3`}>
+          <p className={`px-3 pb-3 text-[9px] font-mono font-semibold uppercase tracking-[0.15em] ${collapsed ? 'md:hidden' : ''}`}
              style={{ color: '#2a2a2a' }}>
             Administración
           </p>
@@ -135,8 +174,10 @@ export default function AdminLayout() {
               <NavLink
                 key={to}
                 to={to}
+                title={collapsed ? label : undefined}
                 className={({ isActive }) =>
                   `group flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm border transition-all duration-200 ` +
+                  `${collapsed ? 'md:justify-center md:px-0' : ''} ` +
                   (isActive ? 'nav-item-active' : 'nav-item-inactive border-transparent')
                 }
               >
@@ -163,7 +204,7 @@ export default function AdminLayout() {
                       )}
                     </div>
 
-                    <div className="flex-1 min-w-0">
+                    <div className={`flex-1 min-w-0 ${collapsed ? 'md:hidden' : ''}`}>
                       <p className="text-sm font-medium leading-none">{label}</p>
                       <p className="text-[10px] mt-0.5 leading-none truncate font-mono"
                          style={{ color: isActive ? 'rgba(212,175,55,0.55)' : '#374151' }}>
@@ -171,7 +212,7 @@ export default function AdminLayout() {
                       </p>
                     </div>
                     {isActive && (
-                      <div className="w-0.5 h-5 rounded-full shrink-0"
+                      <div className={`w-0.5 h-5 rounded-full shrink-0 ${collapsed ? 'md:hidden' : ''}`}
                            style={{ background: 'linear-gradient(180deg, rgba(212,175,55,0.9), rgba(192,192,192,0.5))' }} />
                     )}
                   </>
@@ -185,17 +226,17 @@ export default function AdminLayout() {
         <div className="mx-4 divider-silver opacity-40" />
 
         {/* User card */}
-        <div className="px-3 py-4">
-          <div className="px-4 py-4 rounded-2xl user-card-bg"
+        <div className={`py-4 ${collapsed ? 'md:px-2' : ''} px-3`}>
+          <div className={`rounded-2xl user-card-bg ${collapsed ? 'md:px-0 md:py-3 md:flex md:flex-col md:items-center md:gap-2' : 'px-4 py-4'}`}
                style={{ border: '1px solid rgba(212,175,55,0.09)' }}>
-            <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-3 ${collapsed ? 'md:justify-center md:gap-0' : ''}`}>
               <RankedAvatar
                 name={user?.email}
                 role={user?.role ?? 'admin'}
                 isActive={true}
                 size="md"
               />
-              <div className="flex-1 min-w-0">
+              <div className={`flex-1 min-w-0 ${collapsed ? 'md:hidden' : ''}`}>
                 <p className="text-xs font-medium truncate" style={{ color: '#a1a1aa' }}>{user?.email}</p>
                 <div className="mt-1">
                   <span className={`rank-badge ${adminRank.badgeCls} text-[9px]`}>
@@ -207,13 +248,16 @@ export default function AdminLayout() {
             </div>
             <button
               onClick={handleLogout}
-              className="mt-3.5 w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-all duration-200 group"
+              title="Cerrar sesión"
+              className={`flex items-center gap-2 rounded-lg text-xs transition-all duration-200 group ${
+                collapsed ? 'md:mt-0 md:w-8 md:h-8 md:justify-center md:px-0 mt-3.5 w-full px-2.5 py-1.5' : 'mt-3.5 w-full px-2.5 py-1.5'
+              }`}
               style={{ color: '#4b5563' }}
               onMouseEnter={e => { e.currentTarget.style.color = '#f87171'; e.currentTarget.style.background = 'rgba(239,68,68,0.07)' }}
               onMouseLeave={e => { e.currentTarget.style.color = '#4b5563'; e.currentTarget.style.background = 'transparent' }}
             >
-              <LogOut className="w-3.5 h-3.5" />
-              Cerrar sesión
+              <LogOut className="w-3.5 h-3.5 shrink-0" />
+              <span className={collapsed ? 'md:hidden' : ''}>Cerrar sesión</span>
             </button>
           </div>
         </div>
@@ -226,7 +270,29 @@ export default function AdminLayout() {
       <main className="relative z-10 flex-1 flex flex-col overflow-hidden">
 
         {/* Topbar */}
-        <header className="shrink-0 h-14 px-8 flex items-center gap-2 topbar-bg">
+        <header className="shrink-0 h-14 px-4 md:px-8 flex items-center gap-2 topbar-bg">
+          {/* Hamburguesa (móvil) */}
+          <button
+            onClick={() => setMobileOpen(true)}
+            className="md:hidden w-8 h-8 -ml-1 mr-1 flex items-center justify-center rounded-lg transition-colors"
+            style={{ color: '#D4AF37', border: '1px solid rgba(212,175,55,0.2)', background: 'rgba(212,175,55,0.06)' }}
+            aria-label="Abrir menú"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+          {/* Colapsar sidebar (desktop) */}
+          <button
+            onClick={toggleCollapsed}
+            className="hidden md:flex w-7 h-7 mr-2 items-center justify-center rounded-lg transition-colors"
+            style={{ color: '#4b5563' }}
+            onMouseEnter={e => { e.currentTarget.style.color = '#D4AF37'; e.currentTarget.style.background = 'rgba(212,175,55,0.07)' }}
+            onMouseLeave={e => { e.currentTarget.style.color = '#4b5563'; e.currentTarget.style.background = 'transparent' }}
+            title={collapsed ? 'Expandir menú' : 'Colapsar menú'}
+            aria-label={collapsed ? 'Expandir menú' : 'Colapsar menú'}
+          >
+            {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </button>
+
           {/* Breadcrumb */}
           <span className="text-[10px] font-mono" style={{ color: '#374151' }}>IAM</span>
           <ChevronRight className="w-3 h-3" style={{ color: '#2a2a2a' }} />
@@ -235,7 +301,7 @@ export default function AdminLayout() {
           {/* Right side decorations */}
           <div className="ml-auto flex items-center gap-4">
             {/* Status dot */}
-            <div className="flex items-center gap-1.5">
+            <div className="hidden sm:flex items-center gap-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"
                    style={{ boxShadow: '0 0 6px rgba(74,222,128,0.6)', animation: 'pulse-slow 3s ease-in-out infinite' }} />
               <span className="text-[10px] font-mono" style={{ color: '#374151' }}>Sistema activo</span>
@@ -251,7 +317,7 @@ export default function AdminLayout() {
         {/* Gold top line under header */}
         <div className="divider-gold opacity-20" />
 
-        <div className="flex-1 p-8 overflow-y-auto">
+        <div className="flex-1 p-4 md:p-8 overflow-y-auto">
           <Outlet />
         </div>
       </main>
