@@ -17,14 +17,16 @@ const stagger = {
   visible:  { opacity: 1, transition: { staggerChildren: 0.04 } },
 }
 
-const ROLES = ['terapeuta', 'admin', 'padre', 'alumno']
+// Roles de PLATAFORMA (turing.users.role) — no confundir con los roles de
+// tenant (turing.roles: terapeuta, padre…), que se asignan vía membresías.
+const ROLES = ['user', 'analista', 'developer', 'admin', 'superadmin']
 
 function roleBadgeClass(role) {
   switch (role?.toLowerCase()) {
-    case 'admin':          return 'badge-gold'
-    case 'administrador':  return 'badge-gold'
-    case 'terapeuta':      return 'badge-violet'
-    case 'padre':          return 'badge-teal'
+    case 'superadmin':     return 'badge-gold'
+    case 'admin':          return 'badge-violet'
+    case 'developer':      return 'badge-teal'
+    case 'analista':       return 'badge-teal'
     default:               return 'badge-neutral'
   }
 }
@@ -90,7 +92,7 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ email: '', full_name: '', password: '', role: 'terapeuta' })
+  const [form, setForm] = useState({ email: '', full_name: '', password: '', role: 'user' })
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState(null)
@@ -118,7 +120,7 @@ export default function UsersPage() {
       setSaving(true); setError(null)
       await callAction('iam.user.create.in', form, token)
       setShowForm(false)
-      setForm({ email: '', full_name: '', password: '', role: 'terapeuta' })
+      setForm({ email: '', full_name: '', password: '', role: 'user' })
       await fetchUsers()
     } catch (e) { setError(e.message) }
     finally { setSaving(false) }

@@ -249,7 +249,13 @@ export const RANKS = [
 export function getRankByRole(role, index) {
   // Si existe una lógica por nombre de rol
   const byName = {
+    // Roles de plataforma (turing.users.role)
+    superadmin:  RANKS[7], // leyenda
     admin:       RANKS[3], // oro
+    developer:   RANKS[2], // plata
+    analista:    RANKS[1], // bronce
+    user:        RANKS[0], // hierro
+    // Roles de tenant (turing.roles) — los usa la vista de membresías
     terapeuta:   RANKS[2], // plata
     padre:       RANKS[1], // bronce
     alumno:      RANKS[0], // hierro
