@@ -89,6 +89,9 @@ function StatCard({ label, value, sub, variant = 'gold' }) {
 export default function UsersPage() {
   const { token } = useAuth()
   const [users, setUsers] = useState([])
+  const [memberships, setMemberships] = useState([])
+  const [statusFilter, setStatusFilter] = useState('all')   // all | active | inactive
+  const [groupBy, setGroupBy] = useState('none')            // none | tenant
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showForm, setShowForm] = useState(false)
@@ -103,8 +106,12 @@ export default function UsersPage() {
   async function fetchUsers() {
     try {
       setLoading(true)
-      const data = await callAction('iam.user.list.in', {}, token)
-      setUsers(data?.users || [])
+      const [uData, mData] = await Promise.all([
+        callAction('iam.user.list.in', {}, token),
+        callAction('iam.membership.list.in', {}, token),
+      ])
+      setUsers(uData?.users || [])
+      setMemberships(mData?.memberships || [])
     } catch (e) {
       setError(e.message)
     } finally {
@@ -163,10 +170,46 @@ export default function UsersPage() {
 
   const filtered   = users.filter(u => {
     const q = search.toLowerCase()
-    return !q || u.full_name?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q)
+    const matchesSearch = !q || u.full_name?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q)
+    const matchesStatus =
+      statusFilter === 'all' || (statusFilter === 'active' ? u.is_active : !u.is_active)
+    return matchesSearch && matchesStatus
   })
   const activeCount   = users.filter(u => u.is_active).length
   const inactiveCount = users.length - activeCount
+
+  // Organizaciones de cada usuario (vía sus membresías)
+  const userTenants = memberships.reduce((acc, m) => {
+    if (!acc[m.user_id]) acc[m.user_id] = []
+    if (!acc[m.user_id].some(t => t.id === m.tenant_id)) {
+      acc[m.user_id].push({ id: m.tenant_id, name: m.tenant_name })
+    }
+    return acc
+  }, {})
+
+  // Agrupación por organización: un usuario con N membresías aparece en N
+  // grupos; sin membresía cae en "Sin organización" (al final).
+  const tenantGroups = (() => {
+    if (groupBy !== 'tenant') return []
+    const groups = {}
+    for (const u of filtered) {
+      const tenants = userTenants[u.id] || []
+      if (tenants.length === 0) {
+        if (!groups.__none__) groups.__none__ = { label: 'Sin organización', users: [] }
+        groups.__none__.users.push(u)
+      } else {
+        for (const t of tenants) {
+          if (!groups[t.id]) groups[t.id] = { label: t.name || t.id, users: [] }
+          groups[t.id].users.push(u)
+        }
+      }
+    }
+    return Object.entries(groups)
+      .map(([key, g]) => ({ key, ...g }))
+      .sort((a, b) =>
+        (a.key === '__none__') - (b.key === '__none__') || a.label.localeCompare(b.label)
+      )
+  })()
 
   return (
     <div className="space-y-7">
@@ -296,14 +339,30 @@ export default function UsersPage() {
         </motion.p>
       )}
 
-      {/* ── Search ── */}
+      {/* ── Search + filtros ── */}
       {!loading && users.length > 0 && (
-        <motion.div initial="hidden" animate="visible" variants={fadeInUp} className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
-                  style={{ color: '#374151' }} />
-          <input type="text" placeholder="Buscar por nombre o email…"
-            value={search} onChange={e => setSearch(e.target.value)}
-            className="w-full rounded-xl pl-11 pr-4 py-3 text-sm search-bar" />
+        <motion.div initial="hidden" animate="visible" variants={fadeInUp}
+          className="flex gap-3 items-center flex-wrap">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+                    style={{ color: '#374151' }} />
+            <input type="text" placeholder="Buscar por nombre o email…"
+              value={search} onChange={e => setSearch(e.target.value)}
+              className="w-full rounded-xl pl-11 pr-4 py-3 text-sm search-bar" />
+          </div>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            title="Filtrar por estado"
+            className="rounded-xl px-3 py-3 text-sm input-dark">
+            <option value="all">Todos los estados</option>
+            <option value="active">Solo activos</option>
+            <option value="inactive">Solo inactivos</option>
+          </select>
+          <select value={groupBy} onChange={e => setGroupBy(e.target.value)}
+            title="Agrupar"
+            className="rounded-xl px-3 py-3 text-sm input-dark">
+            <option value="none">Sin agrupar</option>
+            <option value="tenant">Agrupar por organización</option>
+          </select>
         </motion.div>
       )}
 
@@ -347,13 +406,34 @@ export default function UsersPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((u, idx) => {
+              {(groupBy === 'tenant'
+                ? tenantGroups.flatMap(g => [
+                    { __group__: g },
+                    ...g.users.map(u => ({ user: u, groupKey: g.key })),
+                  ])
+                : filtered.map(u => ({ user: u }))
+              ).map((row, idx) => {
+                if (row.__group__) {
+                  return (
+                    <tr key={`group-${row.__group__.key}`}>
+                      <td colSpan={6} className="px-5 py-2.5"
+                          style={{ background: 'rgba(212,175,55,0.04)', borderBottom: '1px solid rgba(212,175,55,0.08)' }}>
+                        <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.14em]"
+                              style={{ color: '#D4AF37' }}>
+                          {row.__group__.label} · {row.__group__.users.length} usuario{row.__group__.users.length !== 1 ? 's' : ''}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                }
+                const u = row.user
+                const rowKey = row.groupKey ? `${row.groupKey}-${u.id}` : u.id
                 const isEditing = editingId === u.id
                 const isBusy    = updatingId === u.id
                 const rank      = getRankByRole(u.role, idx)
 
                 return (
-                  <motion.tr key={u.id} variants={fadeInUp}
+                  <motion.tr key={rowKey} variants={fadeInUp}
                     className="row-hover transition-all duration-200"
                     style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', opacity: isBusy ? 0.55 : 1 }}>
 
@@ -374,6 +454,11 @@ export default function UsersPage() {
                             }}>
                               {u.full_name}
                             </span>
+                            {groupBy === 'none' && (userTenants[u.id] || []).length > 0 && (
+                              <p className="text-[10px] font-mono mt-1" style={{ color: '#4b5563' }}>
+                                {(userTenants[u.id] || []).map(t => t.name).join(' · ')}
+                              </p>
+                            )}
                           </div>
                         )}
                       </div>

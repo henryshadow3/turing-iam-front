@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
-import { Shield, Plus, Loader2 } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Shield, ShieldOff, Plus, Loader2, AlertTriangle } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { callAction } from '@/api/client'
 
@@ -13,6 +13,51 @@ const stagger = {
   visible: { opacity: 1, transition: { staggerChildren: 0.06 } },
 }
 
+const TOGGLE_ERRORS = {
+  CANNOT_DISABLE_ADMIN_ROLE: 'El rol admin no puede desactivarse: dejaría a la organización sin administradores.',
+  ROLE_NOT_FOUND: 'El rol ya no existe.',
+}
+
+function friendlyError(message) {
+  for (const [code, text] of Object.entries(TOGGLE_ERRORS)) {
+    if (message?.includes(code)) return text
+  }
+  return message
+}
+
+function ConfirmModal({ message, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={onCancel} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.93, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.93, y: 8 }}
+        transition={{ duration: 0.2 }}
+        className="relative glass-card rounded-2xl p-6 w-80 space-y-4 z-10"
+        style={{ border: '1px solid rgba(212,175,55,0.18)' }}
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+               style={{ background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.25)' }}>
+            <AlertTriangle className="w-4 h-4" style={{ color: '#D4AF37' }} />
+          </div>
+          <p className="text-sm leading-relaxed" style={{ color: '#d1d5db' }}>{message}</p>
+        </div>
+        <div className="flex gap-2 justify-end pt-1">
+          <button onClick={onCancel}
+            className="px-4 py-1.5 text-sm rounded-lg transition-colors font-medium text-gray-500 hover:text-gray-200">
+            Cancelar
+          </button>
+          <button onClick={onConfirm} className="px-4 py-1.5 text-sm rounded-lg btn-danger font-medium">
+            Confirmar
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
 export default function RolesPage() {
   const { token } = useAuth()
   const [roles, setRoles] = useState([])
@@ -22,6 +67,8 @@ export default function RolesPage() {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ tenant_id: '', name: '' })
   const [saving, setSaving] = useState(false)
+  const [togglingId, setTogglingId] = useState(null)
+  const [confirm, setConfirm] = useState(null)
 
   async function fetchAll() {
     try {
@@ -56,6 +103,29 @@ export default function RolesPage() {
     }
   }
 
+  async function handleToggle(role) {
+    try {
+      setTogglingId(role.id); setError(null)
+      await callAction('iam.role.toggle.in', { role_id: role.id }, token)
+      await fetchAll()
+    } catch (e) {
+      setError(friendlyError(e.message))
+    } finally {
+      setTogglingId(null)
+    }
+  }
+
+  function confirmToggle(role) {
+    if (role.is_active) {
+      setConfirm({
+        message: `¿Desactivar el rol "${role.name}"? Los usuarios con este rol perderán el acceso al tenant en su siguiente inicio de sesión.`,
+        onConfirm: async () => { setConfirm(null); await handleToggle(role) },
+      })
+    } else {
+      handleToggle(role)
+    }
+  }
+
   // Group roles by tenant
   const grouped = roles.reduce((acc, r) => {
     const t = tenants.find(t => t.id === r.tenant_id)
@@ -67,6 +137,10 @@ export default function RolesPage() {
 
   return (
     <div className="space-y-6">
+      <AnimatePresence>
+        {confirm && <ConfirmModal message={confirm.message} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)} />}
+      </AnimatePresence>
+
       <motion.div initial="hidden" animate="visible" variants={fadeInUp} className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-gold-medium/10 border border-gold-medium/20 flex items-center justify-center">
@@ -131,12 +205,45 @@ export default function RolesPage() {
                 <p className="text-xs text-gray-500 uppercase tracking-wider">{tenantName}</p>
               </div>
               <div className="flex flex-wrap gap-2 p-5">
-                {tenantRoles.map(r => (
-                  <span key={r.id} className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-violet/10 border border-violet/20 text-violet-light">
-                    <Shield className="w-3.5 h-3.5" />
-                    {r.name}
-                  </span>
-                ))}
+                {tenantRoles.map(r => {
+                  const isBusy = togglingId === r.id
+                  const isAdminRole = ['admin', 'administrador'].includes(r.name?.toLowerCase())
+                  return (
+                    <span key={r.id}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-all ${
+                        r.is_active
+                          ? 'bg-violet/10 border-violet/20 text-violet-light'
+                          : 'bg-white/[0.02] border-white/10 text-gray-600 line-through'
+                      }`}>
+                      {r.is_active
+                        ? <Shield className="w-3.5 h-3.5" />
+                        : <ShieldOff className="w-3.5 h-3.5" />
+                      }
+                      {r.name}
+                      {!r.is_active && (
+                        <span className="text-[9px] font-mono uppercase tracking-wider no-underline" style={{ color: '#4b5563' }}>
+                          inactivo
+                        </span>
+                      )}
+                      {isBusy ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin ml-1" style={{ color: '#D4AF37' }} />
+                      ) : isAdminRole ? (
+                        <span className="ml-1 text-[9px] font-mono uppercase tracking-wider"
+                              title="El rol admin no puede desactivarse"
+                              style={{ color: '#D4AF37', opacity: 0.6 }}>
+                          protegido
+                        </span>
+                      ) : (
+                        <button onClick={() => confirmToggle(r)}
+                          title={r.is_active ? 'Desactivar rol' : 'Reactivar rol'}
+                          className="ml-1 text-[10px] font-medium px-1.5 py-0.5 rounded transition-colors hover:bg-white/10"
+                          style={{ color: r.is_active ? '#f87171' : '#4ade80' }}>
+                          {r.is_active ? 'Desactivar' : 'Activar'}
+                        </button>
+                      )}
+                    </span>
+                  )
+                })}
               </div>
             </motion.div>
           ))}

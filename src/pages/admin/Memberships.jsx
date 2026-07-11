@@ -73,6 +73,8 @@ export default function MembershipsPage() {
   const [saving,   setSaving]   = useState(false)
   const [updatingId, setUpdatingId] = useState(null)
   const [confirm,  setConfirm]  = useState(null)
+  const [statusFilter, setStatusFilter] = useState('all')  // all | active | inactive
+  const [groupBy, setGroupBy] = useState('none')           // none | tenant | user
 
   async function fetchAll() {
     try {
@@ -93,7 +95,8 @@ export default function MembershipsPage() {
 
   useEffect(() => { if (token) fetchAll() }, [token])
 
-  const filteredRoles = roles.filter(r => !form.tenant_id || r.tenant_id === form.tenant_id)
+  // Solo roles activos son asignables
+  const filteredRoles = roles.filter(r => r.is_active && (!form.tenant_id || r.tenant_id === form.tenant_id))
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -141,6 +144,28 @@ export default function MembershipsPage() {
   }
 
   const activeCount = memberships.filter(m => m.is_active).length
+
+  const filtered = memberships.filter(m =>
+    statusFilter === 'all' || (statusFilter === 'active' ? m.is_active : !m.is_active)
+  )
+
+  // Agrupación por organización o por usuario (un usuario puede tener varias
+  // membresías). Devuelve [{ key, label, items }] ordenado alfabéticamente.
+  const groups = (() => {
+    if (groupBy === 'none') return []
+    const acc = {}
+    for (const m of filtered) {
+      const key   = groupBy === 'tenant' ? m.tenant_id : m.user_id
+      const label = groupBy === 'tenant'
+        ? (m.tenant_name || m.tenant_id)
+        : `${m.full_name || m.email || m.user_id}`
+      if (!acc[key]) acc[key] = { label, items: [] }
+      acc[key].items.push(m)
+    }
+    return Object.entries(acc)
+      .map(([key, g]) => ({ key, ...g }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  })()
 
   return (
     <div className="space-y-7">
@@ -242,6 +267,27 @@ export default function MembershipsPage() {
         </motion.p>
       )}
 
+      {/* ── Filtros ── */}
+      {!loading && memberships.length > 0 && (
+        <motion.div initial="hidden" animate="visible" variants={fadeInUp}
+          className="flex gap-3 items-center flex-wrap justify-end">
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            title="Filtrar por estado"
+            className="rounded-xl px-3 py-2.5 text-sm input-dark">
+            <option value="all">Todos los estados</option>
+            <option value="active">Solo activas</option>
+            <option value="inactive">Solo inactivas</option>
+          </select>
+          <select value={groupBy} onChange={e => setGroupBy(e.target.value)}
+            title="Agrupar"
+            className="rounded-xl px-3 py-2.5 text-sm input-dark">
+            <option value="none">Sin agrupar</option>
+            <option value="tenant">Agrupar por organización</option>
+            <option value="user">Agrupar por usuario</option>
+          </select>
+        </motion.div>
+      )}
+
       {/* ── Table ── */}
       {loading ? (
         <div className="flex flex-col items-center justify-center py-24 gap-3">
@@ -262,7 +308,8 @@ export default function MembershipsPage() {
                style={{ borderBottom: '1px solid rgba(212,175,55,0.07)', background: 'rgba(212,175,55,0.015)' }}>
             <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.12em]"
                   style={{ color: '#374151' }}>
-              {memberships.length} membresía{memberships.length !== 1 ? 's' : ''}
+              {filtered.length} membresía{filtered.length !== 1 ? 's' : ''}
+              {statusFilter !== 'all' && ` (de ${memberships.length})`}
             </span>
           </div>
 
@@ -279,8 +326,32 @@ export default function MembershipsPage() {
               </tr>
             </thead>
             <tbody>
-              {memberships.map((m, idx) => {
-                const tenantRoles = roles.filter(r => r.tenant_id === m.tenant_id)
+              {(groupBy === 'none'
+                ? filtered.map(m => ({ membership: m }))
+                : groups.flatMap(g => [
+                    { __group__: g },
+                    ...g.items.map(m => ({ membership: m })),
+                  ])
+              ).map((row, idx) => {
+                if (row.__group__) {
+                  return (
+                    <tr key={`group-${row.__group__.key}`}>
+                      <td colSpan={6} className="px-5 py-2.5"
+                          style={{ background: 'rgba(212,175,55,0.04)', borderBottom: '1px solid rgba(212,175,55,0.08)' }}>
+                        <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.14em]"
+                              style={{ color: '#D4AF37' }}>
+                          {row.__group__.label} · {row.__group__.items.length} membresía{row.__group__.items.length !== 1 ? 's' : ''}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                }
+                const m = row.membership
+                // Solo roles activos son asignables; el rol actual se conserva
+                // en la lista aunque esté inactivo para que el select no mienta.
+                const tenantRoles = roles.filter(r =>
+                  r.tenant_id === m.tenant_id && (r.is_active || r.id === m.role_id)
+                )
                 const isBusy = updatingId === m.id
                 const rank = getRankByRole(m.role_name, idx)
 

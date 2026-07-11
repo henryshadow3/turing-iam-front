@@ -109,7 +109,8 @@ export default function RequestsPage() {
         <motion.div initial="hidden" animate="visible" variants={stagger} className="space-y-3">
           <AnimatePresence>
             {requests.map((req, idx) => {
-              const tenantRoles = roles.filter(r => r.tenant_id === req.tenant_id)
+              // Solo roles activos son asignables al aprobar
+              const tenantRoles = roles.filter(r => r.tenant_id === req.tenant_id && r.is_active)
               const isBusy = busyId === req.id
               return (
                 <motion.div key={req.id} variants={fadeInUp} exit={{ opacity: 0, x: -12 }}
