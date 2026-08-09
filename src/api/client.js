@@ -38,3 +38,34 @@ export async function selectTenant(tenantId, token) {
 
   return data
 }
+
+async function botRequest(path, token, options = {}) {
+  const res = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(options.headers || {}),
+    },
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.detail || 'Error al administrar el vínculo de Telegram')
+  }
+  return data
+}
+
+export function getTelegramLinks(token) {
+  return botRequest('/bot/telegram-links', token)
+}
+
+export function revokeTelegramLink(chatId, token) {
+  return botRequest(`/bot/telegram-links/${encodeURIComponent(chatId)}/revoke`, token, {
+    method: 'POST',
+  })
+}
+
+export function reactivateTelegramLink(chatId, token) {
+  return botRequest(`/bot/telegram-links/${encodeURIComponent(chatId)}/reactivate`, token, {
+    method: 'POST',
+  })
+}

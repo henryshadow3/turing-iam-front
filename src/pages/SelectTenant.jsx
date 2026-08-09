@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Building2, ArrowRight } from 'lucide-react'
+import { Building2, ArrowRight, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { selectTenant } from '@/api/client'
 import GlimmerBackground from '@/components/GlimmerBackground'
@@ -37,6 +38,7 @@ function TuringLogo() {
 export default function SelectTenant() {
   const { token, user } = useAuth()
   const [error, setError] = useState(null)
+  const navigate = useNavigate()
 
   if (!token || !user) {
     return (
@@ -120,7 +122,52 @@ export default function SelectTenant() {
 
         {/* ── Tenant cards ── */}
         <motion.div initial="hidden" animate="visible" variants={stagger} className="space-y-3">
-          {memberships.length === 0 ? (
+          {user.platform_role === 'superadmin' && (
+            <motion.button
+              variants={fadeInUp}
+              onClick={() => navigate('/admin/users')}
+              className="group w-full rounded-2xl p-5 text-left transition-all duration-300"
+              style={{
+                background: 'rgba(8,8,8,0.8)',
+                border: '1px solid #D4AF3735',
+                boxShadow: '0 0 0 1px #D4AF3715',
+              }}
+              whileHover={{ y: -3, scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = '#D4AF3760'
+                e.currentTarget.style.boxShadow   = '0 0 20px #D4AF3730'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = '#D4AF3735'
+                e.currentTarget.style.boxShadow   = '0 0 0 1px #D4AF3715'
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+                       style={{ background: '#D4AF3712', border: '1px solid #D4AF3725', boxShadow: '0 0 12px #D4AF3730' }}>
+                    <ShieldCheck className="w-5 h-5" style={{ color: '#D4AF37' }} />
+                  </div>
+                  <div>
+                    <p className="font-medium font-sans text-sm" style={{ color: '#e5e7eb' }}>
+                      IAM Turing
+                    </p>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <span className="text-[10px] font-mono" style={{ color: '#374151' }}>
+                        Panel de plataforma · superadmin
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <ArrowRight
+                  className="w-4 h-4 shrink-0 transition-all duration-200 group-hover:translate-x-1"
+                  style={{ color: '#374151' }}
+                />
+              </div>
+            </motion.button>
+          )}
+          {memberships.length === 0 && user.platform_role !== 'superadmin' ? (
             <motion.div variants={fadeInUp}
               className="glass-card rounded-2xl p-8 text-center"
               style={{ border: '1px solid rgba(255,255,255,0.06)' }}>

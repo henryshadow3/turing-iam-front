@@ -8,6 +8,7 @@ import TenantsPage from '@/pages/admin/Tenants'
 import RolesPage from '@/pages/admin/Roles'
 import MembershipsPage from '@/pages/admin/Memberships'
 import RequestsPage from '@/pages/admin/Requests'
+import TelegramLinksPage from '@/pages/admin/TelegramLinks'
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="tenants"     element={<TenantsPage />} />
           <Route path="roles"       element={<RolesPage />} />
           <Route path="memberships" element={<MembershipsPage />} />
+          <Route path="telegram-links" element={<TelegramLinksPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/unauthorized" replace />} />
       </Routes>

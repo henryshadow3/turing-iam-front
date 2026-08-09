@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Users, Building2, Shield, Link2, Inbox, LogOut, ChevronRight, Menu, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Users, Building2, Shield, Link2, Inbox, LogOut, ChevronRight, Menu, X, PanelLeftClose, PanelLeftOpen, Send } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import GlimmerBackground from './GlimmerBackground'
 import { getRankByRole, RankedAvatar } from './RankIcons'
@@ -12,6 +12,7 @@ const navItems = [
   { to: '/admin/tenants',     label: 'Organizaciones', icon: Building2, description: 'Tenants del sistema' },
   { to: '/admin/roles',       label: 'Roles',          icon: Shield,    description: 'Permisos y accesos' },
   { to: '/admin/memberships', label: 'Membresías',     icon: Link2,     description: 'Asignación de roles' },
+  { to: '/admin/telegram-links', label: 'Vínculos Telegram', icon: Send, description: 'Acceso de terapeutas' },
 ]
 
 const BREADCRUMBS = {
@@ -20,6 +21,7 @@ const BREADCRUMBS = {
   '/admin/tenants':     'Organizaciones',
   '/admin/roles':       'Roles',
   '/admin/memberships': 'Membresías',
+  '/admin/telegram-links': 'Vínculos Telegram',
 }
 
 /* Logo SVG mark */
