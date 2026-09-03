@@ -58,11 +58,11 @@ export default function UserDetailPanel({ user, token, onClose }) {
       try {
         setLoading(true); setError(null)
         const [mData, aData] = await Promise.all([
-          callAction('iam.membership.list.in', {}, token),
+          callAction('iam.membership.list.in', { user_id: user.id }, token),
           callAction('iam.application_membership.list.in', { user_id: user.id }, token),
         ])
         if (cancelled) return
-        setMemberships((mData?.memberships || []).filter(m => m.user_id === user.id))
+        setMemberships(mData?.memberships || [])
         setAccesses(aData?.application_memberships || [])
       } catch (e) {
         if (!cancelled) setError(e.message)
