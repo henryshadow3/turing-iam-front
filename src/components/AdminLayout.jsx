@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Users, Building2, Shield, Link2, Inbox, LogOut, ChevronRight, Menu, X, PanelLeftClose, PanelLeftOpen, Send } from 'lucide-react'
+import { Users, Building2, Shield, Link2, Inbox, LogOut, ChevronRight, Menu, X, PanelLeftClose, PanelLeftOpen, Send, Layers, KeyRound } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import GlimmerBackground from './GlimmerBackground'
 import { getRankByRole, RankedAvatar } from './RankIcons'
@@ -10,8 +10,10 @@ const navItems = [
   { to: '/admin/requests',    label: 'Solicitudes',    icon: Inbox,     description: 'Accesos pendientes' },
   { to: '/admin/users',       label: 'Usuarios',       icon: Users,     description: 'Gestión de cuentas' },
   { to: '/admin/tenants',     label: 'Organizaciones', icon: Building2, description: 'Tenants del sistema' },
+  { to: '/admin/applications', label: 'Aplicaciones',  icon: Layers,    description: 'Catálogo y rutas' },
   { to: '/admin/roles',       label: 'Roles',          icon: Shield,    description: 'Permisos y accesos' },
-  { to: '/admin/memberships', label: 'Membresías',     icon: Link2,     description: 'Asignación de roles' },
+  { to: '/admin/memberships', label: 'Membresías',     icon: Link2,     description: 'Afiliación a tenants' },
+  { to: '/admin/application-accesses', label: 'Accesos a apps', icon: KeyRound, description: 'Acceso real por app' },
   { to: '/admin/telegram-links', label: 'Vínculos Telegram', icon: Send, description: 'Acceso de terapeutas' },
 ]
 
@@ -19,8 +21,10 @@ const BREADCRUMBS = {
   '/admin/requests':    'Solicitudes',
   '/admin/users':       'Usuarios',
   '/admin/tenants':     'Organizaciones',
+  '/admin/applications': 'Aplicaciones',
   '/admin/roles':       'Roles',
   '/admin/memberships': 'Membresías',
+  '/admin/application-accesses': 'Accesos a apps',
   '/admin/telegram-links': 'Vínculos Telegram',
 }
 

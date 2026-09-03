@@ -9,6 +9,8 @@ import RolesPage from '@/pages/admin/Roles'
 import MembershipsPage from '@/pages/admin/Memberships'
 import RequestsPage from '@/pages/admin/Requests'
 import TelegramLinksPage from '@/pages/admin/TelegramLinks'
+import ApplicationsPage from '@/pages/admin/Applications'
+import ApplicationAccessesPage from '@/pages/admin/ApplicationAccesses'
 
 export default function App() {
   return (
@@ -28,8 +30,10 @@ export default function App() {
           <Route path="requests"    element={<RequestsPage />} />
           <Route path="users"       element={<UsersPage />} />
           <Route path="tenants"     element={<TenantsPage />} />
+          <Route path="applications" element={<ApplicationsPage />} />
           <Route path="roles"       element={<RolesPage />} />
           <Route path="memberships" element={<MembershipsPage />} />
+          <Route path="application-accesses" element={<ApplicationAccessesPage />} />
           <Route path="telegram-links" element={<TelegramLinksPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/unauthorized" replace />} />

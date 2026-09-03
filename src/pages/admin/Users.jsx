@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Users, UserPlus, Mail, Loader2, Search,
-  Pencil, Check, X, ToggleLeft, ToggleRight, AlertTriangle
+  Pencil, Check, X, ToggleLeft, ToggleRight, AlertTriangle,
+  ChevronLeft, ChevronRight, Eye,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { callAction } from '@/api/client'
 import { RankedAvatar, getRankByRole, RANKS } from '@/components/RankIcons'
+import UserDetailPanel from '@/components/UserDetailPanel'
 
 const fadeInUp = {
   hidden:   { opacity: 0, y: 14 },
@@ -86,31 +88,64 @@ function StatCard({ label, value, sub, variant = 'gold' }) {
   )
 }
 
+const PAGE_SIZE = 25
+const SEARCH_DEBOUNCE_MS = 300
+
 export default function UsersPage() {
   const { token } = useAuth()
   const [users, setUsers] = useState([])
+  const [total, setTotal] = useState(0)
   const [memberships, setMemberships] = useState([])
   const [statusFilter, setStatusFilter] = useState('all')   // all | active | inactive
+  const [roleFilter, setRoleFilter] = useState('all')       // all | user | analista | developer | admin | superadmin
   const [groupBy, setGroupBy] = useState('none')            // none | tenant
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ email: '', full_name: '', password: '', role: 'user' })
   const [saving, setSaving] = useState(false)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState('')          // valor crudo del input (sin debounce)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [page, setPage] = useState(0)                // 0-indexed
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState({ full_name: '', role: '' })
   const [updatingId, setUpdatingId] = useState(null)
   const [confirm, setConfirm] = useState(null)
+  const [selectedUser, setSelectedUser] = useState(null)   // usuario abierto en el panel de detalle
+
+  // Debounce de la búsqueda: solo dispara la query server-side ~300ms
+  // después de que el usuario deja de teclear (evita 1 request por letra
+  // contra un dataset de miles de usuarios).
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // Cualquier cambio de filtro/búsqueda regresa a la primera página.
+  useEffect(() => { setPage(0) }, [debouncedSearch, statusFilter, roleFilter, groupBy])
 
   async function fetchUsers() {
     try {
       setLoading(true)
+      // "Agrupar por organización" necesita cruzar TODOS los usuarios contra
+      // TODAS las membresías para armar los grupos -- en ese modo se
+      // desactiva la paginación de servidor a propósito (caso de uso
+      // distinto: vista administrativa completa, no búsqueda puntual). En
+      // el modo normal (sin agrupar, que es el que escala a miles de
+      // usuarios) SIEMPRE se pagina server-side.
+      const isGrouped = groupBy === 'tenant'
+      const payload = {
+        search: debouncedSearch || undefined,
+        role: roleFilter !== 'all' ? roleFilter : undefined,
+        is_active: statusFilter === 'all' ? undefined : statusFilter === 'active',
+        ...(isGrouped ? {} : { limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+      }
       const [uData, mData] = await Promise.all([
-        callAction('iam.user.list.in', {}, token),
+        callAction('iam.user.list.in', payload, token),
         callAction('iam.membership.list.in', {}, token),
       ])
       setUsers(uData?.users || [])
+      setTotal(uData?.total ?? (uData?.users || []).length)
       setMemberships(mData?.memberships || [])
     } catch (e) {
       setError(e.message)
@@ -119,7 +154,7 @@ export default function UsersPage() {
     }
   }
 
-  useEffect(() => { if (token) fetchUsers() }, [token])
+  useEffect(() => { if (token) fetchUsers() }, [token, debouncedSearch, statusFilter, roleFilter, groupBy, page])
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -168,15 +203,16 @@ export default function UsersPage() {
     })
   }
 
-  const filtered   = users.filter(u => {
-    const q = search.toLowerCase()
-    const matchesSearch = !q || u.full_name?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q)
-    const matchesStatus =
-      statusFilter === 'all' || (statusFilter === 'active' ? u.is_active : !u.is_active)
-    return matchesSearch && matchesStatus
-  })
+  // El filtrado (búsqueda, rol, estado) ya ocurre server-side (ver
+  // fetchUsers) -- "users" que llega del backend YA es la página filtrada,
+  // no hace falta volver a filtrar en el cliente. Ver requisito de Henry:
+  // la búsqueda debe escalar a miles de usuarios sin traer la tabla
+  // completa al navegador.
+  const filtered = users
   const activeCount   = users.filter(u => u.is_active).length
   const inactiveCount = users.length - activeCount
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const isPaginated = groupBy !== 'tenant'
 
   // Organizaciones de cada usuario (vía sus membresías)
   const userTenants = memberships.reduce((acc, m) => {
@@ -243,17 +279,21 @@ export default function UsersPage() {
       </motion.div>
 
       {/* ── Stats row ── */}
-      {!loading && users.length > 0 && (
+      {/* "total" viene del servidor y refleja el conteo real bajo los
+          filtros activos (no el tamaño de la página cargada) -- así el
+          admin sabe cuántos usuarios hay en total aunque solo se hayan
+          traído 25 al navegador. */}
+      {!loading && total > 0 && (
         <motion.div initial="hidden" animate="visible" variants={stagger}
           className="grid grid-cols-3 gap-4">
           <motion.div variants={fadeInUp}>
-            <StatCard label="Total de usuarios" value={users.length} sub="registrados en el sistema" variant="gold" />
+            <StatCard label="Coinciden con el filtro" value={total} sub={isPaginated ? `mostrando ${users.length} en esta página` : 'registrados en el sistema'} variant="gold" />
           </motion.div>
           <motion.div variants={fadeInUp}>
-            <StatCard label="Usuarios activos" value={activeCount} sub={`${Math.round(activeCount/users.length*100)||0}% del total`} variant="silver" />
+            <StatCard label="Activos (página)" value={activeCount} sub={`${Math.round(activeCount/users.length*100)||0}% de esta página`} variant="silver" />
           </motion.div>
           <motion.div variants={fadeInUp}>
-            <StatCard label="Usuarios inactivos" value={inactiveCount} sub="acceso deshabilitado" variant="violet" />
+            <StatCard label="Inactivos (página)" value={inactiveCount} sub="acceso deshabilitado" variant="violet" />
           </motion.div>
         </motion.div>
       )}
@@ -339,32 +379,46 @@ export default function UsersPage() {
         </motion.p>
       )}
 
-      {/* ── Search + filtros ── */}
-      {!loading && users.length > 0 && (
-        <motion.div initial="hidden" animate="visible" variants={fadeInUp}
-          className="flex gap-3 items-center flex-wrap">
-          <div className="relative flex-1 min-w-[220px]">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
-                    style={{ color: '#374151' }} />
-            <input type="text" placeholder="Buscar por nombre o email…"
-              value={search} onChange={e => setSearch(e.target.value)}
-              className="w-full rounded-xl pl-11 pr-4 py-3 text-sm search-bar" />
-          </div>
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-            title="Filtrar por estado"
-            className="rounded-xl px-3 py-3 text-sm input-dark">
-            <option value="all">Todos los estados</option>
-            <option value="active">Solo activos</option>
-            <option value="inactive">Solo inactivos</option>
-          </select>
-          <select value={groupBy} onChange={e => setGroupBy(e.target.value)}
-            title="Agrupar"
-            className="rounded-xl px-3 py-3 text-sm input-dark">
-            <option value="none">Sin agrupar</option>
-            <option value="tenant">Agrupar por organización</option>
-          </select>
-        </motion.div>
-      )}
+      {/* ── Search + filtros ──
+          Búsqueda server-side con debounce de 300ms (ver useEffect de
+          debouncedSearch): cada tecleo NO dispara una query -- solo se
+          consulta al backend 300ms después de que el usuario deja de
+          escribir, y esa query trae SOLO la página filtrada (25 filas),
+          nunca la tabla completa. Esto es lo que permite que la búsqueda
+          escale a miles de usuarios (requisito de Henry). */}
+      <motion.div initial="hidden" animate="visible" variants={fadeInUp}
+        className="flex gap-3 items-center flex-wrap">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+                  style={{ color: '#374151' }} />
+          <input type="text" placeholder="Buscar por nombre o email…"
+            value={search} onChange={e => setSearch(e.target.value)}
+            className="w-full rounded-xl pl-11 pr-4 py-3 text-sm search-bar" />
+          {search !== debouncedSearch && (
+            <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin"
+                     style={{ color: '#374151' }} />
+          )}
+        </div>
+        <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}
+          title="Filtrar por rol de plataforma"
+          className="rounded-xl px-3 py-3 text-sm input-dark">
+          <option value="all">Todos los roles</option>
+          {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+          title="Filtrar por estado"
+          className="rounded-xl px-3 py-3 text-sm input-dark">
+          <option value="all">Todos los estados</option>
+          <option value="active">Solo activos</option>
+          <option value="inactive">Solo inactivos</option>
+        </select>
+        <select value={groupBy} onChange={e => setGroupBy(e.target.value)}
+          title="Agrupar"
+          className="rounded-xl px-3 py-3 text-sm input-dark">
+          <option value="none">Sin agrupar (paginado)</option>
+          <option value="tenant">Agrupar por organización</option>
+        </select>
+      </motion.div>
 
       {/* ── Table ── */}
       {loading ? (
@@ -376,7 +430,9 @@ export default function UsersPage() {
         <div className="glass-card rounded-2xl py-20 text-center">
           <Users className="w-9 h-9 mx-auto mb-4" style={{ color: '#2a2a2a' }} />
           <p className="text-sm font-medium" style={{ color: '#4b5563' }}>
-            {search ? 'Sin resultados para esa búsqueda' : 'No hay usuarios registrados'}
+            {debouncedSearch || roleFilter !== 'all' || statusFilter !== 'all'
+              ? 'Sin resultados para ese filtro'
+              : 'No hay usuarios registrados'}
           </p>
         </div>
       ) : (
@@ -542,13 +598,22 @@ export default function UsersPage() {
                           </button>
                         </div>
                       ) : (
-                        <button onClick={() => startEdit(u)} title="Editar usuario"
-                          className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
-                          style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#374151' }}
-                          onMouseEnter={e => { e.currentTarget.style.color = '#D4AF37'; e.currentTarget.style.borderColor = 'rgba(212,175,55,0.3)'; e.currentTarget.style.background = 'rgba(212,175,55,0.08)' }}
-                          onMouseLeave={e => { e.currentTarget.style.color = '#374151'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}>
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center gap-2 justify-end">
+                          <button onClick={() => setSelectedUser(u)} title="Ver detalle: afiliaciones, accesos y roles"
+                            className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
+                            style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#374151' }}
+                            onMouseEnter={e => { e.currentTarget.style.color = '#38bdf8'; e.currentTarget.style.borderColor = 'rgba(56,189,248,0.3)'; e.currentTarget.style.background = 'rgba(56,189,248,0.08)' }}
+                            onMouseLeave={e => { e.currentTarget.style.color = '#374151'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}>
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => startEdit(u)} title="Editar usuario"
+                            className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
+                            style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#374151' }}
+                            onMouseEnter={e => { e.currentTarget.style.color = '#D4AF37'; e.currentTarget.style.borderColor = 'rgba(212,175,55,0.3)'; e.currentTarget.style.background = 'rgba(212,175,55,0.08)' }}
+                            onMouseLeave={e => { e.currentTarget.style.color = '#374151'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}>
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </motion.tr>
@@ -558,11 +623,34 @@ export default function UsersPage() {
           </table>
 
           {/* Table footer */}
-          <div className="px-6 py-3 flex items-center justify-between"
+          <div className="px-6 py-3 flex items-center justify-between flex-wrap gap-3"
                style={{ borderTop: '1px solid rgba(255,255,255,0.03)', background: 'rgba(0,0,0,0.2)' }}>
             <span className="text-[10px] font-mono" style={{ color: '#2a2a2a' }}>
-              Mostrando {filtered.length} de {users.length}
+              {isPaginated
+                ? `Página ${page + 1} de ${totalPages} · ${filtered.length} de ${total} coinciden`
+                : `Mostrando ${filtered.length} de ${total}`}
             </span>
+
+            {isPaginated && totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#9ca3af' }}
+                  title="Página anterior">
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="text-[10px] font-mono px-1" style={{ color: '#4b5563' }}>
+                  {page + 1} / {totalPages}
+                </span>
+                <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#9ca3af' }}
+                  title="Página siguiente">
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Rank legend mini */}
             <div className="flex items-center gap-3">
               {RANKS.slice(0, 4).map(r => (
@@ -575,6 +663,13 @@ export default function UsersPage() {
           </div>
         </motion.div>
       )}
+
+      {/* ── Panel de detalle de usuario (requisito de Henry) ── */}
+      <AnimatePresence>
+        {selectedUser && (
+          <UserDetailPanel user={selectedUser} token={token} onClose={() => setSelectedUser(null)} />
+        )}
+      </AnimatePresence>
     </div>
   )
 }

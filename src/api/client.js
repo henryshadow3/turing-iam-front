@@ -39,6 +39,30 @@ export async function selectTenant(tenantId, token) {
   return data
 }
 
+export async function selectApplication(tenantApplicationId, token) {
+  // Endpoint nuevo de W6 (turing-api): fija tenant + aplicación + rol de
+  // forma explícita cuando el usuario tiene más de un application_membership
+  // -- select-tenant solo no basta porque no distingue entre varias apps
+  // dentro del mismo tenant, ni resuelve el caso multi-tenant + multi-app
+  // sin ambigüedad.
+  const res = await fetch(`${API_URL}/auth/select-application`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ tenant_application_id: tenantApplicationId }),
+  })
+
+  const data = await res.json()
+
+  if (!res.ok) {
+    throw new Error(data.detail || 'Error al seleccionar la aplicación')
+  }
+
+  return data
+}
+
 async function botRequest(path, token, options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
