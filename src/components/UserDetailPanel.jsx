@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  X, Mail, Loader2, Building2, Link2, ShieldCheck, ShieldOff,
-  AlertTriangle, Layers, KeyRound,
+  X, Mail, Loader2, Building2, ShieldCheck, ShieldOff,
+  AlertTriangle, Layers, KeyRound, Plus, ToggleLeft, ToggleRight, Pencil, Check,
 } from 'lucide-react'
 import { callAction } from '@/api/client'
 import { RankedAvatar, getRankByRole } from '@/components/RankIcons'
@@ -14,6 +14,24 @@ const fadeInUp = {
 const stagger = {
   hidden:  { opacity: 0 },
   visible: { opacity: 1, transition: { staggerChildren: 0.05 } },
+}
+
+const ERROR_MESSAGES = {
+  USER_NOT_AFFILIATED_TO_TENANT: 'Ese usuario no está afiliado al tenant dueño de esta aplicación. Primero crea la afiliación arriba.',
+  ROLE_APPLICATION_MISMATCH: 'El rol elegido no pertenece a esta aplicación.',
+  ROLE_TENANT_MISMATCH: 'El rol elegido es exclusivo de otro tenant.',
+  TENANT_APPLICATION_INACTIVE: 'Esa aplicación está deshabilitada para este tenant.',
+  APPLICATION_MEMBERSHIP_ALREADY_EXISTS: 'Ese usuario ya tiene acceso a esta combinación tenant + aplicación.',
+  ROLE_INACTIVE: 'Ese rol está desactivado y no puede asignarse.',
+  ROLE_NOT_FOUND: 'El rol seleccionado ya no existe.',
+  CANNOT_DISABLE_ADMIN_ROLE: 'El rol admin no puede desactivarse: dejaría a la organización sin administradores.',
+}
+
+function friendlyError(message) {
+  for (const [code, text] of Object.entries(ERROR_MESSAGES)) {
+    if (message?.includes(code)) return text
+  }
+  return message
 }
 
 /* Distintivo de estado activo/inactivo, reutilizado en ambos bloques */
@@ -31,16 +49,34 @@ function StatusPill({ isActive, activeLabel = 'Activo', inactiveLabel = 'Inactiv
   )
 }
 
+function ToggleControl({ isActive, isBusy, onToggle, activeLabel = 'Activo', inactiveLabel = 'Inactivo' }) {
+  if (isBusy) return <Loader2 className="w-4 h-4 animate-spin" style={{ color: '#D4AF37' }} />
+  return (
+    <button onClick={onToggle} type="button"
+      className="flex items-center gap-1.5 disabled:cursor-not-allowed"
+      title={isActive ? 'Desactivar' : 'Activar'}>
+      {isActive ? (
+        <><ToggleRight className="w-5 h-5 toggle-on" /><span className="text-[10px] toggle-on font-mono">{activeLabel}</span></>
+      ) : (
+        <><ToggleLeft className="w-5 h-5 toggle-off" /><span className="text-[10px] toggle-off font-mono">{inactiveLabel}</span></>
+      )}
+    </button>
+  )
+}
+
 /**
- * UserDetailPanel — vista de detalle de un usuario (requisito de Henry).
+ * UserDetailPanel — vista de detalle Y edición de un usuario (requisito de
+ * Henry, ampliado en W7b para ser completamente editable desde aquí).
  *
- * Muestra, SEPARADOS y sin ambigüedad:
- *   1. Identidad (reutiliza los mismos campos que Users.jsx)
+ * Muestra y permite gestionar, SEPARADOS y sin ambigüedad:
+ *   1. Identidad (reutiliza los mismos campos que Users.jsx) — solo lectura.
  *   2. Afiliaciones (turing.user_memberships) — pertenencia organizacional,
- *      NO otorga acceso a ninguna app (ADR 0001 §1 regla 1).
+ *      NO otorga acceso a ninguna app (ADR 0001 §1 regla 1). Se puede
+ *      agregar una nueva afiliación y activar/desactivar las existentes.
  *   3. Accesos de aplicación (turing.application_memberships) — el acceso
- *      real, agrupado por tenant, dejando explícito el caso "afiliado sin
- *      acceso" cuando un tenant tiene afiliación pero cero accesos.
+ *      real, agrupado por tenant. Se puede agregar un nuevo acceso (solo a
+ *      tenants donde el usuario YA esté afiliado), activar/desactivar, y
+ *      editar el rol de un acceso existente sin desactivar/recrear.
  *
  * El rol se muestra siempre en su contexto (organizacional vs. de app,
  * por tenant, por tenant+app) para que nunca se confunda un rol con otro
@@ -52,18 +88,54 @@ export default function UserDetailPanel({ user, token, onClose }) {
   const [memberships, setMemberships] = useState([])
   const [accesses, setAccesses] = useState([])
 
+  // Catálogos auxiliares para los formularios embebidos (se cargan una vez).
+  const [tenants, setTenants] = useState([])
+  const [roles, setRoles] = useState([])
+  const [applications, setApplications] = useState([])
+  const [tenantApplications, setTenantApplications] = useState([])
+
+  const [busyId, setBusyId] = useState(null)
+
+  const [showMembershipForm, setShowMembershipForm] = useState(false)
+  const [membershipForm, setMembershipForm] = useState({ tenant_id: '', role_id: '' })
+  const [savingMembership, setSavingMembership] = useState(false)
+
+  const [showAccessForm, setShowAccessForm] = useState(false)
+  const [accessForm, setAccessForm] = useState({ tenant_id: '', tenant_application_id: '', role_id: '' })
+  const [savingAccess, setSavingAccess] = useState(false)
+
+  const [editingAccessId, setEditingAccessId] = useState(null)
+  const [editingRoleId, setEditingRoleId] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
+
+  async function loadDetail() {
+    const [mData, aData] = await Promise.all([
+      callAction('iam.membership.list.in', { user_id: user.id }, token),
+      callAction('iam.application_membership.list.in', { user_id: user.id }, token),
+    ])
+    setMemberships(mData?.memberships || [])
+    setAccesses(aData?.application_memberships || [])
+  }
+
+  async function loadCatalogs() {
+    const [tData, rData, appData, taData] = await Promise.all([
+      callAction('iam.tenant.list.in', {}, token),
+      callAction('iam.role.list.in', {}, token),
+      callAction('iam.application.list.in', {}, token),
+      callAction('iam.tenant_application.list.in', {}, token),
+    ])
+    setTenants(tData?.tenants || [])
+    setRoles(rData?.roles || [])
+    setApplications(appData?.applications || [])
+    setTenantApplications(taData?.tenant_applications || [])
+  }
+
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
         setLoading(true); setError(null)
-        const [mData, aData] = await Promise.all([
-          callAction('iam.membership.list.in', { user_id: user.id }, token),
-          callAction('iam.application_membership.list.in', { user_id: user.id }, token),
-        ])
-        if (cancelled) return
-        setMemberships(mData?.memberships || [])
-        setAccesses(aData?.application_memberships || [])
+        await Promise.all([loadDetail(), loadCatalogs()])
       } catch (e) {
         if (!cancelled) setError(e.message)
       } finally {
@@ -72,7 +144,16 @@ export default function UserDetailPanel({ user, token, onClose }) {
     }
     load()
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.id, token])
+
+  async function refresh() {
+    try {
+      await loadDetail()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
 
   // Agrupa accesos de aplicación por tenant, para poder cruzarlos con las
   // afiliaciones y detectar "afiliado sin acceso" tenant por tenant.
@@ -84,6 +165,123 @@ export default function UserDetailPanel({ user, token, onClose }) {
   }, {})
 
   const rank = getRankByRole(user.role, 0)
+
+  // ── Afiliaciones: toggle ──
+  async function handleMembershipToggle(membershipId) {
+    try {
+      setBusyId(membershipId); setError(null)
+      await callAction('iam.membership.toggle.in', { membership_id: membershipId }, token)
+      await refresh()
+    } catch (e) { setError(friendlyError(e.message)) }
+    finally { setBusyId(null) }
+  }
+
+  // ── Afiliaciones: crear ──
+  const membershipRoleOptions = roles.filter(r =>
+    r.tenant_id === membershipForm.tenant_id && r.is_active
+  )
+  const membershipFormComplete = Boolean(membershipForm.tenant_id && membershipForm.role_id)
+
+  async function handleMembershipCreate(e) {
+    e.preventDefault()
+    if (!membershipFormComplete) return
+    try {
+      setSavingMembership(true); setError(null)
+      await callAction('iam.membership.create.in', {
+        user_id: user.id,
+        tenant_id: membershipForm.tenant_id,
+        role_id: membershipForm.role_id,
+      }, token)
+      setShowMembershipForm(false)
+      setMembershipForm({ tenant_id: '', role_id: '' })
+      await refresh()
+    } catch (e) { setError(friendlyError(e.message)) }
+    finally { setSavingMembership(false) }
+  }
+
+  // Tenants a los que el usuario está afiliado pero aún no tiene membresía
+  // creada más de una vez -- no hay restricción de "una sola membresía"
+  // explícita aquí, pero sí tiene sentido excluir tenants ya afiliados para
+  // no ofrecer una afiliación duplicada por accidente.
+  const affiliatedTenantIds = new Set(memberships.map(m => m.tenant_id))
+  const tenantsForNewMembership = tenants.filter(t => !affiliatedTenantIds.has(t.id))
+
+  // ── Accesos de aplicación: toggle ──
+  async function handleAccessToggle(accessId) {
+    try {
+      setBusyId(accessId); setError(null)
+      await callAction('iam.application_membership.toggle.in', { application_membership_id: accessId }, token)
+      await refresh()
+    } catch (e) { setError(friendlyError(e.message)) }
+    finally { setBusyId(null) }
+  }
+
+  // ── Accesos de aplicación: crear ──
+  // Regla dura: solo se pueden elegir tenants a los que el usuario YA esté
+  // afiliado (usa las afiliaciones ya cargadas en el propio panel, no todos
+  // los tenants del sistema).
+  const affiliatedTenants = tenants.filter(t => affiliatedTenantIds.has(t.id))
+  const availableTenantAppsForAccess = tenantApplications.filter(
+    ta => ta.is_active && (!accessForm.tenant_id || ta.tenant_id === accessForm.tenant_id)
+  )
+  const selectedTenantAppForAccess = tenantApplications.find(ta => ta.id === accessForm.tenant_application_id)
+  const availableRolesForAccess = roles.filter(r => {
+    if (!selectedTenantAppForAccess) return false
+    if (r.application_id !== selectedTenantAppForAccess.application_id) return false
+    if (r.tenant_id && r.tenant_id !== selectedTenantAppForAccess.tenant_id) return false
+    return r.is_active
+  })
+  const accessFormComplete = Boolean(accessForm.tenant_id && accessForm.tenant_application_id && accessForm.role_id)
+
+  async function handleAccessCreate(e) {
+    e.preventDefault()
+    if (!accessFormComplete) return
+    try {
+      setSavingAccess(true); setError(null)
+      await callAction('iam.application_membership.create.in', {
+        user_id: user.id,
+        tenant_application_id: accessForm.tenant_application_id,
+        role_id: accessForm.role_id,
+      }, token)
+      setShowAccessForm(false)
+      setAccessForm({ tenant_id: '', tenant_application_id: '', role_id: '' })
+      await refresh()
+    } catch (e) { setError(friendlyError(e.message)) }
+    finally { setSavingAccess(false) }
+  }
+
+  // ── Accesos de aplicación: editar rol inline ──
+  function startEditAccess(access) {
+    setEditingAccessId(access.id)
+    setEditingRoleId(access.role_id)
+    setError(null)
+  }
+  function cancelEditAccess() {
+    setEditingAccessId(null)
+    setEditingRoleId('')
+  }
+  function rolesForAccess(access) {
+    // El nuevo rol debe seguir perteneciendo a la misma aplicación que la
+    // tenant_application del acceso (ROLE_APPLICATION_MISMATCH en backend).
+    return roles.filter(r => {
+      if (r.application_id !== access.application_id) return false
+      if (r.tenant_id && r.tenant_id !== access.tenant_id) return false
+      return r.is_active || r.id === access.role_id
+    })
+  }
+  async function handleAccessRoleUpdate(access) {
+    if (!editingRoleId || editingRoleId === access.role_id) { cancelEditAccess(); return }
+    try {
+      setSavingEdit(true); setError(null)
+      await callAction('iam.application_membership.update.in', {
+        application_membership_id: access.id,
+        role_id: editingRoleId,
+      }, token)
+      cancelEditAccess()
+      await refresh()
+    } catch (e) { setError(friendlyError(e.message)) }
+    finally { setSavingEdit(false) }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -152,17 +350,66 @@ export default function UserDetailPanel({ user, token, onClose }) {
 
               {/* ── Bloque 1: Afiliaciones ── */}
               <motion.section variants={fadeInUp}>
-                <div className="flex items-center gap-2 mb-1">
-                  <Building2 className="w-4 h-4" style={{ color: '#38bdf8' }} />
-                  <h3 className="text-sm font-semibold" style={{ color: '#e5e7eb' }}>Afiliaciones</h3>
-                  <span className="text-[10px] font-mono" style={{ color: '#374151' }}>
-                    ({memberships.length})
-                  </span>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="w-4 h-4" style={{ color: '#38bdf8' }} />
+                    <h3 className="text-sm font-semibold" style={{ color: '#e5e7eb' }}>Afiliaciones</h3>
+                    <span className="text-[10px] font-mono" style={{ color: '#374151' }}>
+                      ({memberships.length})
+                    </span>
+                  </div>
+                  <button type="button" onClick={() => setShowMembershipForm(v => !v)}
+                    className="flex items-center gap-1 text-[11px] font-mono px-2 py-1 rounded-lg transition-colors"
+                    style={{ color: '#38bdf8', border: '1px solid rgba(56,189,248,0.25)', background: 'rgba(56,189,248,0.06)' }}>
+                    <Plus className="w-3 h-3" />Afiliar a tenant
+                  </button>
                 </div>
                 <p className="text-[11px] font-mono mb-3" style={{ color: '#4b5563' }}>
                   Pertenencia organizacional a un tenant. <strong style={{ color: '#6b7280' }}>No otorga
                   acceso a ninguna aplicación por sí sola.</strong>
                 </p>
+
+                <AnimatePresence>
+                  {showMembershipForm && (
+                    <motion.form
+                      initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                      onSubmit={handleMembershipCreate}
+                      className="rounded-xl p-4 mb-3 space-y-3"
+                      style={{ background: 'rgba(56,189,248,0.04)', border: '1px solid rgba(56,189,248,0.18)' }}>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Tenant</label>
+                          <select required value={membershipForm.tenant_id}
+                            onChange={e => setMembershipForm({ tenant_id: e.target.value, role_id: '' })}
+                            className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark">
+                            <option value="">Seleccionar…</option>
+                            {tenantsForNewMembership.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Rol organizacional</label>
+                          <select required value={membershipForm.role_id} disabled={!membershipForm.tenant_id}
+                            onChange={e => setMembershipForm(f => ({ ...f, role_id: e.target.value }))}
+                            className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark disabled:opacity-50">
+                            <option value="">{membershipForm.tenant_id ? 'Seleccionar…' : 'Elige un tenant primero'}</option>
+                            {membershipRoleOptions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 justify-end">
+                        <button type="button" onClick={() => setShowMembershipForm(false)}
+                          className="px-3 py-1.5 text-xs font-medium" style={{ color: '#4b5563' }}>
+                          Cancelar
+                        </button>
+                        <button type="submit" disabled={savingMembership || !membershipFormComplete}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-medium"
+                          style={{ color: '#38bdf8', border: '1px solid rgba(56,189,248,0.3)', background: 'rgba(56,189,248,0.1)' }}>
+                          {savingMembership && <Loader2 className="w-3 h-3 animate-spin" />}Afiliar
+                        </button>
+                      </div>
+                    </motion.form>
+                  )}
+                </AnimatePresence>
 
                 {memberships.length === 0 ? (
                   <div className="rounded-xl px-4 py-4 text-center" style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)' }}>
@@ -172,7 +419,7 @@ export default function UserDetailPanel({ user, token, onClose }) {
                   <div className="space-y-2">
                     {memberships.map(m => (
                       <div key={m.id} className="rounded-xl px-4 py-3 flex items-center justify-between gap-3"
-                           style={{ background: 'rgba(56,189,248,0.05)', border: '1px solid rgba(56,189,248,0.16)' }}>
+                           style={{ background: 'rgba(56,189,248,0.05)', border: '1px solid rgba(56,189,248,0.16)', opacity: busyId === m.id ? 0.6 : 1 }}>
                         <div className="flex items-center gap-2.5 min-w-0">
                           <Building2 className="w-3.5 h-3.5 shrink-0" style={{ color: '#38bdf8' }} />
                           <div className="min-w-0">
@@ -182,7 +429,9 @@ export default function UserDetailPanel({ user, token, onClose }) {
                             </p>
                           </div>
                         </div>
-                        <StatusPill isActive={m.is_active} activeLabel="Afiliado" inactiveLabel="Baja" />
+                        <ToggleControl isActive={m.is_active} isBusy={busyId === m.id}
+                          onToggle={() => handleMembershipToggle(m.id)}
+                          activeLabel="Afiliado" inactiveLabel="Baja" />
                       </div>
                     ))}
                   </div>
@@ -193,18 +442,90 @@ export default function UserDetailPanel({ user, token, onClose }) {
 
               {/* ── Bloque 2: Accesos de aplicación, agrupados por tenant ── */}
               <motion.section variants={fadeInUp}>
-                <div className="flex items-center gap-2 mb-1">
-                  <KeyRound className="w-4 h-4" style={{ color: '#D4AF37' }} />
-                  <h3 className="text-sm font-semibold" style={{ color: '#e5e7eb' }}>Accesos de aplicación</h3>
-                  <span className="text-[10px] font-mono" style={{ color: '#374151' }}>
-                    ({accesses.length})
-                  </span>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <KeyRound className="w-4 h-4" style={{ color: '#D4AF37' }} />
+                    <h3 className="text-sm font-semibold" style={{ color: '#e5e7eb' }}>Accesos de aplicación</h3>
+                    <span className="text-[10px] font-mono" style={{ color: '#374151' }}>
+                      ({accesses.length})
+                    </span>
+                  </div>
+                  <button type="button" onClick={() => setShowAccessForm(v => !v)} disabled={affiliatedTenants.length === 0}
+                    title={affiliatedTenants.length === 0 ? 'Afilia primero al usuario a un tenant' : undefined}
+                    className="flex items-center gap-1 text-[11px] font-mono px-2 py-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ color: '#D4AF37', border: '1px solid rgba(212,175,55,0.3)', background: 'rgba(212,175,55,0.08)' }}>
+                    <Plus className="w-3 h-3" />Otorgar acceso
+                  </button>
                 </div>
                 <p className="text-[11px] font-mono mb-3" style={{ color: '#4b5563' }}>
                   Acceso real a una combinación tenant + aplicación, con su propio rol.
                   <strong style={{ color: '#6b7280' }}> Es lo único que autoriza entrar a una app</strong> —
                   distinto de la afiliación de arriba.
                 </p>
+
+                <AnimatePresence>
+                  {showAccessForm && (
+                    <motion.form
+                      initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                      onSubmit={handleAccessCreate}
+                      className="rounded-xl p-4 mb-3 space-y-3"
+                      style={{ background: 'rgba(212,175,55,0.04)', border: '1px solid rgba(212,175,55,0.18)' }}>
+                      <p className="text-[10px] font-mono" style={{ color: '#4b5563' }}>
+                        Solo puedes elegir tenants a los que este usuario ya esté afiliado.
+                      </p>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Tenant</label>
+                          <select required value={accessForm.tenant_id}
+                            onChange={e => setAccessForm({ tenant_id: e.target.value, tenant_application_id: '', role_id: '' })}
+                            className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark">
+                            <option value="">Seleccionar…</option>
+                            {affiliatedTenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Aplicación</label>
+                          <select required value={accessForm.tenant_application_id} disabled={!accessForm.tenant_id}
+                            onChange={e => setAccessForm(f => ({ ...f, tenant_application_id: e.target.value, role_id: '' }))}
+                            className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark disabled:opacity-50">
+                            <option value="">{accessForm.tenant_id ? 'Seleccionar…' : 'Elige un tenant primero'}</option>
+                            {availableTenantAppsForAccess.map(ta => {
+                              const app = applications.find(a => a.id === ta.application_id)
+                              return <option key={ta.id} value={ta.id}>{app?.name || ta.application_slug}</option>
+                            })}
+                          </select>
+                          {accessForm.tenant_id && availableTenantAppsForAccess.length === 0 && (
+                            <p className="text-[9px] font-mono mt-1" style={{ color: '#f59e0b' }}>
+                              Sin aplicaciones habilitadas para este tenant.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Rol de aplicación</label>
+                          <select required value={accessForm.role_id} disabled={!accessForm.tenant_application_id}
+                            onChange={e => setAccessForm(f => ({ ...f, role_id: e.target.value }))}
+                            className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark disabled:opacity-50">
+                            <option value="">{accessForm.tenant_application_id ? 'Seleccionar…' : 'Elige una aplicación primero'}</option>
+                            {availableRolesForAccess.map(r => (
+                              <option key={r.id} value={r.id}>{r.name}{r.tenant_id ? ' (custom)' : ' (catálogo)'}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 justify-end">
+                        <button type="button" onClick={() => setShowAccessForm(false)}
+                          className="px-3 py-1.5 text-xs font-medium" style={{ color: '#4b5563' }}>
+                          Cancelar
+                        </button>
+                        <button type="submit" disabled={savingAccess || !accessFormComplete}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-medium"
+                          style={{ color: '#D4AF37', border: '1px solid rgba(212,175,55,0.35)', background: 'rgba(212,175,55,0.12)' }}>
+                          {savingAccess && <Loader2 className="w-3 h-3 animate-spin" />}Otorgar acceso
+                        </button>
+                      </div>
+                    </motion.form>
+                  )}
+                </AnimatePresence>
 
                 {memberships.length === 0 ? (
                   <div className="rounded-xl px-4 py-4 text-center" style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)' }}>
@@ -240,23 +561,58 @@ export default function UserDetailPanel({ user, token, onClose }) {
                             </div>
                           ) : (
                             <div className="p-3 space-y-2">
-                              {tenantAccesses.map(a => (
-                                <div key={a.id} className="rounded-lg px-3.5 py-2.5 flex items-center justify-between gap-3"
-                                     style={{ background: 'rgba(212,175,55,0.05)', border: '1px solid rgba(212,175,55,0.16)' }}>
-                                  <div className="flex items-center gap-2.5 min-w-0">
-                                    <Layers className="w-3.5 h-3.5 shrink-0" style={{ color: '#D4AF37' }} />
-                                    <div className="min-w-0">
-                                      <p className="text-sm font-medium truncate" style={{ color: '#e5e7eb' }}>
-                                        Acceso a {a.application_slug}
-                                      </p>
-                                      <p className="text-[10px] font-mono mt-0.5" style={{ color: '#4b5563' }}>
-                                        Rol de aplicación: <span style={{ color: '#D4AF37' }}>{a.role_name}</span>
-                                      </p>
+                              {tenantAccesses.map(a => {
+                                const isEditing = editingAccessId === a.id
+                                const isBusy = busyId === a.id
+                                return (
+                                  <div key={a.id} className="rounded-lg px-3.5 py-2.5 flex items-center justify-between gap-3"
+                                       style={{ background: 'rgba(212,175,55,0.05)', border: '1px solid rgba(212,175,55,0.16)', opacity: isBusy ? 0.6 : 1 }}>
+                                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                      <Layers className="w-3.5 h-3.5 shrink-0" style={{ color: '#D4AF37' }} />
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-sm font-medium truncate" style={{ color: '#e5e7eb' }}>
+                                          Acceso a {a.application_slug}
+                                        </p>
+                                        {isEditing ? (
+                                          <div className="flex items-center gap-1.5 mt-1">
+                                            <select value={editingRoleId} autoFocus
+                                              onChange={e => setEditingRoleId(e.target.value)}
+                                              className="text-[11px] rounded px-1.5 py-0.5 input-dark">
+                                              {rolesForAccess(a).map(r => (
+                                                <option key={r.id} value={r.id}>{r.name}</option>
+                                              ))}
+                                            </select>
+                                            <button type="button" onClick={() => handleAccessRoleUpdate(a)} disabled={savingEdit}
+                                              className="w-5 h-5 flex items-center justify-center rounded"
+                                              style={{ color: '#4ade80', background: 'rgba(74,222,128,0.1)' }} title="Confirmar">
+                                              {savingEdit ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                                            </button>
+                                            <button type="button" onClick={cancelEditAccess}
+                                              className="w-5 h-5 flex items-center justify-center rounded"
+                                              style={{ color: '#6b7280' }} title="Cancelar">
+                                              <X className="w-3 h-3" />
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <p className="text-[10px] font-mono mt-0.5 flex items-center gap-1.5" style={{ color: '#4b5563' }}>
+                                            Rol de aplicación: <span style={{ color: '#D4AF37' }}>{a.role_name}</span>
+                                            <button type="button" onClick={() => startEditAccess(a)}
+                                              className="w-4 h-4 flex items-center justify-center rounded transition-colors"
+                                              style={{ color: '#4b5563' }}
+                                              onMouseEnter={e => e.currentTarget.style.color = '#D4AF37'}
+                                              onMouseLeave={e => e.currentTarget.style.color = '#4b5563'}
+                                              title="Editar rol">
+                                              <Pencil className="w-2.5 h-2.5" />
+                                            </button>
+                                          </p>
+                                        )}
+                                      </div>
                                     </div>
+                                    <ToggleControl isActive={a.is_active} isBusy={isBusy}
+                                      onToggle={() => handleAccessToggle(a.id)} />
                                   </div>
-                                  <StatusPill isActive={a.is_active} />
-                                </div>
-                              ))}
+                                )
+                              })}
                             </div>
                           )}
                         </div>

@@ -1,8 +1,37 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Shield, ShieldOff, Plus, Loader2, AlertTriangle } from 'lucide-react'
+import { Shield, ShieldOff, Plus, Loader2, AlertTriangle, Layers, Building2 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { callAction } from '@/api/client'
+
+const SCOPE_OPTIONS = [
+  { value: 'legacy',  label: 'Legacy (organizacional)', hint: 'Rol de afiliación pura a un tenant — el modelo de siempre.' },
+  { value: 'catalog', label: 'Catálogo (por aplicación)', hint: 'Compartido por todos los tenants que tengan esa aplicación habilitada.' },
+  { value: 'custom',  label: 'Custom (tenant + aplicación)', hint: 'Exclusivo de un tenant para una aplicación específica.' },
+]
+
+const CREATE_ERRORS = {
+  MISSING_FIELD_NAME: 'El nombre del rol es obligatorio.',
+  MISSING_FIELD_TENANT_ID: 'Selecciona un tenant o una aplicación para definir el alcance del rol.',
+  INVALID_ROLE_SCOPE: 'Combinación de alcance inválida para este rol.',
+}
+
+function friendlyCreateError(message) {
+  for (const [code, text] of Object.entries(CREATE_ERRORS)) {
+    if (message?.includes(code)) return text
+  }
+  return message
+}
+
+function scopeBadge(role) {
+  if (role.scope === 'catalog' || (!role.tenant_id && role.application_id)) {
+    return { label: `Catálogo: ${role.application_name || role.application_slug || '—'}`, cls: 'badge-gold', Icon: Layers }
+  }
+  if (role.scope === 'custom' || (role.tenant_id && role.application_id)) {
+    return { label: `Custom: ${role.tenant_name || role.tenant_id} / ${role.application_name || role.application_slug || '—'}`, cls: 'badge-violet', Icon: Layers }
+  }
+  return { label: 'Legacy', cls: 'badge-neutral', Icon: Building2 }
+}
 
 const fadeInUp = {
   hidden: { opacity: 0, y: 20 },
@@ -58,14 +87,18 @@ function ConfirmModal({ message, onConfirm, onCancel }) {
   )
 }
 
+const emptyForm = { scope: 'legacy', tenant_id: '', application_id: '', name: '' }
+
 export default function RolesPage() {
   const { token } = useAuth()
   const [roles, setRoles] = useState([])
   const [tenants, setTenants] = useState([])
+  const [applications, setApplications] = useState([])
+  const [tenantApplications, setTenantApplications] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ tenant_id: '', name: '' })
+  const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [togglingId, setTogglingId] = useState(null)
   const [confirm, setConfirm] = useState(null)
@@ -73,12 +106,16 @@ export default function RolesPage() {
   async function fetchAll() {
     try {
       setLoading(true)
-      const [rolesData, tenantsData] = await Promise.all([
+      const [rolesData, tenantsData, appsData, tappsData] = await Promise.all([
         callAction('iam.role.list.in', {}, token),
         callAction('iam.tenant.list.in', {}, token),
+        callAction('iam.application.list.in', {}, token),
+        callAction('iam.tenant_application.list.in', {}, token),
       ])
       setRoles(rolesData?.roles || [])
       setTenants(tenantsData?.tenants || [])
+      setApplications(appsData?.applications || [])
+      setTenantApplications(tappsData?.tenant_applications || [])
     } catch (e) {
       setError(e.message)
     } finally {
@@ -88,20 +125,49 @@ export default function RolesPage() {
 
   useEffect(() => { if (token) fetchAll() }, [token])
 
+  // Aplicaciones habilitadas y activas para el tenant elegido, usadas en el
+  // alcance "custom" — mismo patrón que ApplicationAccesses.jsx: nunca se
+  // ofrece una tenant_application inactiva ni de otro tenant.
+  const availableApplicationsForTenant = tenantApplications
+    .filter(ta => ta.is_active && (!form.tenant_id || ta.tenant_id === form.tenant_id))
+    .map(ta => applications.find(a => a.id === ta.application_id))
+    .filter(Boolean)
+
+  function handleScopeChange(scope) {
+    setForm(f => ({ ...emptyForm, scope, name: f.name }))
+  }
+
   async function handleCreate(e) {
     e.preventDefault()
     try {
-      setSaving(true)
-      await callAction('iam.role.create.in', form, token)
+      setSaving(true); setError(null)
+      const payload = { name: form.name }
+      if (form.scope === 'legacy') {
+        payload.tenant_id = form.tenant_id
+      } else if (form.scope === 'catalog') {
+        payload.application_id = form.application_id
+      } else if (form.scope === 'custom') {
+        payload.tenant_id = form.tenant_id
+        payload.application_id = form.application_id
+      }
+      await callAction('iam.role.create.in', payload, token)
       setShowForm(false)
-      setForm({ tenant_id: '', name: '' })
+      setForm(emptyForm)
       await fetchAll()
     } catch (e) {
-      setError(e.message)
+      setError(friendlyCreateError(e.message))
     } finally {
       setSaving(false)
     }
   }
+
+  const formComplete = Boolean(
+    form.name && (
+      (form.scope === 'legacy' && form.tenant_id) ||
+      (form.scope === 'catalog' && form.application_id) ||
+      (form.scope === 'custom' && form.tenant_id && form.application_id)
+    )
+  )
 
   async function handleToggle(role) {
     try {
@@ -126,10 +192,17 @@ export default function RolesPage() {
     }
   }
 
-  // Group roles by tenant
+  // Agrupa por alcance real: los roles legacy/custom se agrupan por tenant
+  // (como antes); los roles de catálogo (sin tenant) se agrupan por
+  // aplicación, ya que son compartidos por todos los tenants con esa app.
   const grouped = roles.reduce((acc, r) => {
-    const t = tenants.find(t => t.id === r.tenant_id)
-    const key = t?.name || r.tenant_id
+    let key
+    if (!r.tenant_id && r.application_id) {
+      key = `Catálogo · ${r.application_name || r.application_slug || r.application_id}`
+    } else {
+      const t = tenants.find(t => t.id === r.tenant_id)
+      key = t?.name || r.tenant_id
+    }
     if (!acc[key]) acc[key] = []
     acc[key].push(r)
     return acc
@@ -168,25 +241,82 @@ export default function RolesPage() {
           className="glass-card rounded-xl p-6 space-y-4"
         >
           <h2 className="text-sm font-medium text-gray-300">Nuevo rol</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Tenant</label>
-              <select required value={form.tenant_id} onChange={e => setForm({ ...form, tenant_id: e.target.value })}
-                className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-gold-medium/50">
-                <option value="">Seleccionar...</option>
-                {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
+
+          <div>
+            <label className="block text-xs text-gray-500 mb-1.5">Alcance del rol</label>
+            <div className="grid grid-cols-3 gap-2">
+              {SCOPE_OPTIONS.map(opt => (
+                <button key={opt.value} type="button" title={opt.hint}
+                  onClick={() => handleScopeChange(opt.value)}
+                  className={`text-left px-3 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                    form.scope === opt.value
+                      ? 'bg-gold-medium/15 border-gold-medium/40 text-gold-medium'
+                      : 'bg-white/[0.02] border-white/10 text-gray-500 hover:text-gray-300'
+                  }`}>
+                  {opt.label}
+                </button>
+              ))}
             </div>
+            <p className="text-[10px] font-mono mt-1.5" style={{ color: '#4b5563' }}>
+              {SCOPE_OPTIONS.find(o => o.value === form.scope)?.hint}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            {(form.scope === 'legacy' || form.scope === 'custom') && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Tenant</label>
+                <select required value={form.tenant_id}
+                  onChange={e => setForm(f => ({ ...f, tenant_id: e.target.value, application_id: '' }))}
+                  className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-gold-medium/50">
+                  <option value="">Seleccionar...</option>
+                  {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+            )}
+
+            {form.scope === 'catalog' && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Aplicación</label>
+                <select required value={form.application_id}
+                  onChange={e => setForm(f => ({ ...f, application_id: e.target.value }))}
+                  className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-gold-medium/50">
+                  <option value="">Seleccionar...</option>
+                  {applications.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </div>
+            )}
+
+            {form.scope === 'custom' && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Aplicación habilitada para ese tenant</label>
+                <select required value={form.application_id} disabled={!form.tenant_id}
+                  onChange={e => setForm(f => ({ ...f, application_id: e.target.value }))}
+                  className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-gold-medium/50 disabled:opacity-50">
+                  <option value="">{form.tenant_id ? 'Seleccionar...' : 'Elige un tenant primero'}</option>
+                  {availableApplicationsForTenant.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+                {form.tenant_id && availableApplicationsForTenant.length === 0 && (
+                  <p className="text-[10px] font-mono mt-1" style={{ color: '#f59e0b' }}>
+                    Este tenant no tiene ninguna aplicación habilitada todavía.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="block text-xs text-gray-500 mb-1">Nombre del rol</label>
-              <input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
+              <input required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="terapeuta"
                 className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-gold-medium/50" />
             </div>
           </div>
+
           <div className="flex gap-3 justify-end pt-2">
-            <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors">Cancelar</button>
-            <button type="submit" disabled={saving} className="flex items-center gap-2 px-4 py-2 text-sm bg-gold-medium/10 border border-gold-medium/25 text-gold-medium rounded-lg hover:bg-gold-medium/20 transition-colors disabled:opacity-50">
+            <button type="button" onClick={() => { setShowForm(false); setForm(emptyForm) }} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors">Cancelar</button>
+            <button type="submit" disabled={saving || !formComplete}
+              title={!formComplete ? 'Completa el alcance y el nombre del rol' : undefined}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-gold-medium/10 border border-gold-medium/25 text-gold-medium rounded-lg hover:bg-gold-medium/20 transition-colors disabled:opacity-50">
               {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}Crear
             </button>
           </div>
@@ -208,6 +338,7 @@ export default function RolesPage() {
                 {tenantRoles.map(r => {
                   const isBusy = togglingId === r.id
                   const isAdminRole = ['admin', 'administrador'].includes(r.name?.toLowerCase())
+                  const badge = scopeBadge(r)
                   return (
                     <span key={r.id}
                       className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-all ${
@@ -220,6 +351,9 @@ export default function RolesPage() {
                         : <ShieldOff className="w-3.5 h-3.5" />
                       }
                       {r.name}
+                      <span className={`rank-badge ${badge.cls} no-underline`}>
+                        <badge.Icon size={10} />{badge.label}
+                      </span>
                       {!r.is_active && (
                         <span className="text-[9px] font-mono uppercase tracking-wider no-underline" style={{ color: '#4b5563' }}>
                           inactivo
