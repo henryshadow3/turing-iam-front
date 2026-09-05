@@ -490,8 +490,13 @@ export default function UsersPage() {
 
                 return (
                   <motion.tr key={rowKey} variants={fadeInUp}
+                    onClick={() => { if (!isEditing && !isBusy) setSelectedUser(u) }}
                     className="row-hover transition-all duration-200"
-                    style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', opacity: isBusy ? 0.55 : 1 }}>
+                    style={{
+                      borderBottom: '1px solid rgba(255,255,255,0.03)',
+                      opacity: isBusy ? 0.55 : 1,
+                      cursor: isEditing ? 'default' : 'pointer',
+                    }}>
 
                     {/* ── Usuario ── */}
                     <td className="px-5 py-4">
@@ -499,6 +504,7 @@ export default function UsersPage() {
                         <RankedAvatar name={u.full_name} role={u.role} index={idx} isActive={u.is_active} size="md" />
                         {isEditing ? (
                           <input autoFocus value={editForm.full_name}
+                            onClick={e => e.stopPropagation()}
                             onChange={e => setEditForm({ ...editForm, full_name: e.target.value })}
                             className="rounded-lg px-2.5 py-1.5 text-sm w-44 input-dark"
                             style={{ borderColor: 'rgba(212,175,55,0.35)' }} />
@@ -544,6 +550,7 @@ export default function UsersPage() {
                     <td className="px-5 py-4">
                       {isEditing ? (
                         <select value={editForm.role}
+                          onClick={e => e.stopPropagation()}
                           onChange={e => setEditForm({ ...editForm, role: e.target.value })}
                           className="rounded-lg px-2 py-1 text-xs input-dark"
                           style={{ borderColor: 'rgba(212,175,55,0.35)' }}>
@@ -558,7 +565,7 @@ export default function UsersPage() {
 
                     {/* ── Estado ── */}
                     <td className="px-5 py-4">
-                      <button onClick={() => confirmToggle(u)}
+                      <button onClick={e => { e.stopPropagation(); confirmToggle(u) }}
                         disabled={isBusy || isEditing}
                         className="flex items-center gap-1.5 disabled:cursor-not-allowed"
                         title={u.is_active ? 'Deshabilitar usuario' : 'Reactivar usuario'}>
@@ -582,14 +589,14 @@ export default function UsersPage() {
                         <Loader2 className="w-4 h-4 animate-spin ml-auto" style={{ color: '#D4AF37' }} />
                       ) : isEditing ? (
                         <div className="flex items-center gap-2 justify-end">
-                          <button onClick={() => handleUpdate(u.id)} title="Guardar"
+                          <button onClick={e => { e.stopPropagation(); handleUpdate(u.id) }} title="Guardar"
                             className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
                             style={{ background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.25)', color: '#4ade80' }}
                             onMouseEnter={e => e.currentTarget.style.background = 'rgba(74,222,128,0.18)'}
                             onMouseLeave={e => e.currentTarget.style.background = 'rgba(74,222,128,0.1)'}>
                             <Check className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={cancelEdit} title="Cancelar"
+                          <button onClick={e => { e.stopPropagation(); cancelEdit() }} title="Cancelar"
                             className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
                             style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#6b7280' }}
                             onMouseEnter={e => e.currentTarget.style.color = '#e5e7eb'}
@@ -599,14 +606,14 @@ export default function UsersPage() {
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 justify-end">
-                          <button onClick={() => setSelectedUser(u)} title="Ver detalle: afiliaciones, accesos y roles"
+                          <button onClick={e => { e.stopPropagation(); setSelectedUser(u) }} title="Ver detalle: afiliaciones, accesos y roles"
                             className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
                             style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#374151' }}
                             onMouseEnter={e => { e.currentTarget.style.color = '#38bdf8'; e.currentTarget.style.borderColor = 'rgba(56,189,248,0.3)'; e.currentTarget.style.background = 'rgba(56,189,248,0.08)' }}
                             onMouseLeave={e => { e.currentTarget.style.color = '#374151'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}>
                             <Eye className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => startEdit(u)} title="Editar usuario"
+                          <button onClick={e => { e.stopPropagation(); startEdit(u) }} title="Editar usuario"
                             className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
                             style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#374151' }}
                             onMouseEnter={e => { e.currentTarget.style.color = '#D4AF37'; e.currentTarget.style.borderColor = 'rgba(212,175,55,0.3)'; e.currentTarget.style.background = 'rgba(212,175,55,0.08)' }}
