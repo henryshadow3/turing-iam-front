@@ -51,3 +51,6 @@ export async function callAction(event) {
 
 export async function selectTenant() { return {} }
 export async function selectApplication() { return {} }
+export function getTelegramLinks() { return Promise.resolve({ links: [] }) }
+export function revokeTelegramLink() { return Promise.resolve({}) }
+export function reactivateTelegramLink() { return Promise.resolve({}) }
