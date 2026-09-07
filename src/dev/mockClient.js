@@ -26,7 +26,13 @@ const SCENARIOS = {
 // El query param ?suspended=1 permite arrancar ya en estado suspendido.
 let membershipSuspendedMock = new URLSearchParams(window.location.search).get('suspended') === '1'
 
-export async function callAction(event) {
+// Estado mutable en memoria SOLO para W12 -- users.is_active (cuenta global,
+// login) alternado desde el panel de detalle. Independiente de
+// appAccessOverrides (accesos por app) y de membershipSuspendedMock
+// (membresía/afiliación): las tres cosas son semánticamente distintas.
+const userActiveOverrides = {} // userId -> boolean
+
+export async function callAction(event, payload) {
   const scenario = SCENARIOS[currentScenarioKey()] || SCENARIOS.zero
   // Pequeño delay artificial para poder ver el estado "Cargando…" también.
   await new Promise(r => setTimeout(r, 150))
@@ -34,6 +40,14 @@ export async function callAction(event) {
     case 'iam.membership.list.in':
       return { memberships: scenario.memberships }
     case 'iam.application_membership.list.in':
+      // Sin filtro (caso de las tabs de Users.jsx, W12) -> se agregan los
+      // application_memberships mock de W12 a los del escenario activo, para
+      // que el cliente pueda derivar el estado real del toggle cruzando por
+      // application_id -- el backend real NO trae ese estado precalculado
+      // en iam.user.list.in (ver mockData.js, comentario en USERS_BY_APP).
+      if (!payload?.user_id && !payload?.tenant_application_id) {
+        return { application_memberships: [...scenario.accesses, ...mock.APP_MEMBERSHIPS_W12] }
+      }
       return { application_memberships: scenario.accesses }
     case 'iam.tenant.list.in':
       return { tenants: mock.TENANTS }
@@ -43,6 +57,31 @@ export async function callAction(event) {
       return { applications: mock.APPLICATIONS }
     case 'iam.tenant_application.list.in':
       return { tenant_applications: mock.TENANT_APPLICATIONS }
+    // ── W12: tabs de aplicación en Users.jsx ──
+    case 'iam.user.list.in': {
+      // Sin application_id -> comportamiento normal (no usado por el
+      // harness de tabs, pero se mantiene por si algo más lo consulta).
+      if (!payload?.application_id) return { users: [], total: 0 }
+      const list = (mock.USERS_BY_APP[payload.application_id] || []).map(u => ({
+        ...u,
+        is_active: u.id in userActiveOverrides ? userActiveOverrides[u.id] : u.is_active,
+      }))
+      return { users: list, total: list.length }
+    }
+    case 'iam.user.toggle_application_access.in': {
+      const { user_id, application_id } = payload || {}
+      const result = mock.toggleAppAccessMock(user_id, application_id)
+      if (!result) throw new Error('NO_APPLICATION_ACCESS_FOR_USER')
+      return { user_id, application_id, ...result }
+    }
+    case 'iam.user.disable.in': {
+      userActiveOverrides[payload?.user_id] = false
+      return {}
+    }
+    case 'iam.user.update.in': {
+      if ('is_active' in (payload || {})) userActiveOverrides[payload.user_id] = payload.is_active
+      return {}
+    }
     // Mutaciones -- el harness es de solo lectura visual, así que devuelven
     // éxito sin persistir nada (recargar cambia de escenario, no hace falta
     // simular estado mutable para verificar la interacción del árbol).
