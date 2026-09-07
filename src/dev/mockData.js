@@ -48,6 +48,19 @@ export const MEMBERSHIPS_ZERO = [
 ]
 export const ACCESSES_ZERO = []
 
+/** Caso W11.1: usuario sin NINGUNA afiliación ni acceso (0 y 0) — el que
+ * expuso el bug real de "Suspender membresía" quedando en estado sin
+ * sentido para un usuario totalmente vacío. */
+export const USER_EMPTY = {
+  id: 'user-empty',
+  full_name: 'SP2 Fixture Admin (vacío)',
+  email: 'sp2-fixture-admin@brilliant.local',
+  role: 'admin',
+  is_active: true,
+}
+export const MEMBERSHIPS_EMPTY = []
+export const ACCESSES_EMPTY = []
+
 /** Caso B: usuario con exactamente 1 acceso (1 app, 1 tenant) */
 export const USER_ONE_APP = {
   id: 'user-one',

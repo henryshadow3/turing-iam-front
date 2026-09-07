@@ -301,6 +301,15 @@ export default function UserDetailPanel({ user, token, onClose }) {
   // los tenants del sistema).
   const affiliatedTenants = tenants.filter(t => affiliatedTenantIds.has(t.id))
 
+  // Interruptor global de membresía (W11.1): si el usuario no tiene NINGUNA
+  // afiliación ni acceso activo, y tampoco hay una suspensión vigente que
+  // restaurar, "Suspender membresía" no tiene nada real que hacer -- se
+  // deshabilita en vez de dejar un clic sin efecto útil (bug reportado por
+  // Henry: el botón quedaba en "Suspender" indefinidamente para un usuario
+  // sin datos, sin ninguna acción que tuviera sentido ejecutar).
+  const nothingToSuspend =
+    memberships.every(m => !m.is_active) && accesses.every(a => !a.is_active)
+
   // La aplicación queda fija (`_appId`, la fila del árbol que se expandió) —
   // el formulario solo pide tenant + rol (W10). Se filtra tenantApplications
   // por esa app fija Y por el tenant elegido, para resolver automáticamente
@@ -479,14 +488,18 @@ export default function UserDetailPanel({ user, token, onClose }) {
                 <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: '#4b5563' }} />
               ) : (
                 <button type="button" onClick={() => setPendingSuspensionAction(membershipSuspended ? 'restore' : 'suspend')}
-                  disabled={suspensionBusy}
+                  disabled={suspensionBusy || (!membershipSuspended && nothingToSuspend)}
                   title={membershipSuspended
                     ? 'Reactiva exactamente las afiliaciones y accesos que estaban activos antes del apagón global'
-                    : 'Desactiva TODAS las afiliaciones y accesos activos de este usuario (no impide el login)'}
-                  className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    : nothingToSuspend
+                      ? 'Este usuario no tiene ninguna afiliación ni acceso activo — afílialo primero a un tenant'
+                      : 'Desactiva TODAS las afiliaciones y accesos activos de este usuario (no impide el login)'}
+                  className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   style={membershipSuspended
                     ? { color: '#4ade80', border: '1px solid rgba(74,222,128,0.3)', background: 'rgba(74,222,128,0.08)' }
-                    : { color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', background: 'rgba(239,68,68,0.06)' }}>
+                    : nothingToSuspend
+                      ? { color: '#6b7280', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)' }
+                      : { color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', background: 'rgba(239,68,68,0.06)' }}>
                   {suspensionBusy
                     ? <Loader2 className="w-3 h-3 animate-spin" />
                     : membershipSuspended ? <PlayCircle className="w-3 h-3" /> : <PauseCircle className="w-3 h-3" />}

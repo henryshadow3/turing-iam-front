@@ -21,6 +21,7 @@ const USERS = {
   zero:  mock.USER_ZERO_APPS,
   one:   mock.USER_ONE_APP,
   multi: mock.USER_MULTI,
+  empty: mock.USER_EMPTY,
 }
 
 export default function AccessTreePreview() {

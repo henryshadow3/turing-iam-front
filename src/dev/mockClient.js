@@ -15,6 +15,7 @@ const SCENARIOS = {
   zero:  { memberships: mock.MEMBERSHIPS_ZERO,  accesses: mock.ACCESSES_ZERO },
   one:   { memberships: mock.MEMBERSHIPS_ONE,   accesses: mock.ACCESSES_ONE },
   multi: { memberships: mock.MEMBERSHIPS_MULTI, accesses: mock.ACCESSES_MULTI },
+  empty: { memberships: mock.MEMBERSHIPS_EMPTY, accesses: mock.ACCESSES_EMPTY },
 }
 
 // Estado mutable en memoria SOLO para el interruptor de membresía global
