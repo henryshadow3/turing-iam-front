@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "dev:w10-preview": "vite --config vite.config.preview.mjs"
+    "dev:w10-preview": "vite --config vite.config.preview.mjs",
+    "dev:w12-preview": "vite --config vite.config.preview.mjs"
   },
   "dependencies": {
     "react": "^19.2.6",

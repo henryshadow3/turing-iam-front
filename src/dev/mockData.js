@@ -81,6 +81,65 @@ export const ACCESSES_ONE = [
   },
 ]
 
+// ── Usuarios + escenarios para las tabs de aplicación de Users.jsx (W12) ──
+// Shape calcado de iam.user.list.in con application_id: cada usuario trae
+// app_access_status ("access" | "affiliated_no_access") cuando se filtra
+// por aplicación -- ver UserPostgresRepository.list_all en turing-iam-worker.
+// IMPORTANTE: esa respuesta NO trae si el acceso está activo/inactivo (solo
+// si existe alguno) -- el estado real del toggle se deriva cruzando
+// application_memberships (igual que hace el componente real), no viene
+// precalculado del backend. Ver APP_MEMBERSHIPS_W12 abajo.
+export const USERS_BY_APP = {
+  'app-brilliant': [
+    { id: 'user-w12-1', full_name: 'Diana Acceso',       email: 'diana.acceso@example.com',     role: 'user', is_active: true, app_access_status: 'access' },
+    { id: 'user-w12-2', full_name: 'Eduardo Suspendido', email: 'eduardo.susp@example.com',     role: 'user', is_active: true, app_access_status: 'access' },
+    { id: 'user-w12-3', full_name: 'Fabiola Afiliada',   email: 'fabiola.afiliada@example.com', role: 'user', is_active: true, app_access_status: 'affiliated_no_access' },
+  ],
+  'app-integrarse': [
+    { id: 'user-w12-4', full_name: 'Gerardo Integra', email: 'gerardo.integra@example.com', role: 'user', is_active: true, app_access_status: 'access' },
+  ],
+  'app-finflow': [], // caso: aplicación sin ningún usuario relevante todavía
+}
+
+// application_memberships mutable en memoria (shape de
+// iam.application_membership.list.in / _enrich) -- Diana con acceso activo,
+// Eduardo con acceso YA inactivo (para ver el toggle en ambos estados desde
+// el primer render, sin necesidad de hacer clic primero).
+export let APP_MEMBERSHIPS_W12 = [
+  {
+    id: 'am-w12-1', user_id: 'user-w12-1', tenant_application_id: 'ta-bt-brilliant',
+    tenant_id: 'tenant-bt', tenant_slug: 'brilliant-therapy',
+    application_id: 'app-brilliant', application_slug: 'brilliant',
+    role_id: 'role-bt-terapeuta', role_name: 'terapeuta', is_active: true,
+  },
+  {
+    id: 'am-w12-2', user_id: 'user-w12-2', tenant_application_id: 'ta-bt-brilliant',
+    tenant_id: 'tenant-bt', tenant_slug: 'brilliant-therapy',
+    application_id: 'app-brilliant', application_slug: 'brilliant',
+    role_id: 'role-bt-terapeuta', role_name: 'terapeuta', is_active: false,
+  },
+  {
+    id: 'am-w12-3', user_id: 'user-w12-4', tenant_application_id: 'ta-int-integrarse',
+    tenant_id: 'tenant-int', tenant_slug: 'integrarse',
+    application_id: 'app-integrarse', application_slug: 'integrarse',
+    role_id: 'role-int-alumno', role_name: 'alumno', is_active: true,
+  },
+]
+
+// Alterna, EN MEMORIA, todos los application_memberships de un usuario para
+// una aplicación -- misma semántica any_active que
+// ApplicationMembershipPostgresRepository.toggle_by_application (real).
+export function toggleAppAccessMock(userId, applicationId) {
+  const rows = APP_MEMBERSHIPS_W12.filter(r => r.user_id === userId && r.application_id === applicationId)
+  if (rows.length === 0) return null
+  const anyActive = rows.some(r => r.is_active)
+  const nextState = !anyActive
+  APP_MEMBERSHIPS_W12 = APP_MEMBERSHIPS_W12.map(r =>
+    (r.user_id === userId && r.application_id === applicationId) ? { ...r, is_active: nextState } : r
+  )
+  return { is_active: nextState, affected_count: rows.length }
+}
+
 /** Caso C: usuario multi-tenant en al menos una app (varias apps, varios tenants) */
 export const USER_MULTI = {
   id: 'user-multi',

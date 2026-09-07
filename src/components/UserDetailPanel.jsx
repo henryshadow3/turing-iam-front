@@ -138,11 +138,22 @@ function GlobalActionConfirmModal({ message, confirmLabel, onConfirm, onCancel }
  * por tenant, por tenant+app) para que nunca se confunda un rol con otro
  * aunque el usuario tenga roles distintos en distintos lugares.
  */
-export default function UserDetailPanel({ user, token, onClose }) {
+export default function UserDetailPanel({ user, token, onClose, onUserUpdated }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [memberships, setMemberships] = useState([])
   const [accesses, setAccesses] = useState([])
+
+  // Control de cuenta global (login a nivel plataforma, turing.users.is_active)
+  // — movido aquí desde la columna "Estado" de Users.jsx (W12, confirmado
+  // por Henry). Estado local propio porque `user` es solo el snapshot con el
+  // que se abrió el panel; se actualiza tras cada toggle exitoso y se
+  // notifica al padre (onUserUpdated) para refrescar la tabla sin cerrar el
+  // panel. Reutiliza los mismos eventos que ya existían en Users.jsx para
+  // esta acción: iam.user.disable.in / iam.user.update.in.
+  const [accountActive, setAccountActive] = useState(user.is_active)
+  const [accountBusy, setAccountBusy] = useState(false)
+  const [pendingAccountToggle, setPendingAccountToggle] = useState(false)
 
   // Catálogos auxiliares para los formularios embebidos (se cargan una vez).
   const [tenants, setTenants] = useState([])
@@ -451,6 +462,21 @@ export default function UserDetailPanel({ user, token, onClose }) {
     finally { setSuspensionBusy(false) }
   }
 
+  // ── Control de cuenta global (login) ──
+  async function handleToggleAccount() {
+    try {
+      setAccountBusy(true); setError(null)
+      if (accountActive) {
+        await callAction('iam.user.disable.in', { user_id: user.id }, token)
+      } else {
+        await callAction('iam.user.update.in', { user_id: user.id, is_active: true }, token)
+      }
+      setAccountActive(v => !v)
+      onUserUpdated?.()
+    } catch (e) { setError(friendlyError(e.message)) }
+    finally { setAccountBusy(false) }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <motion.div
@@ -471,13 +497,29 @@ export default function UserDetailPanel({ user, token, onClose }) {
         {/* ── Header: identidad ── */}
         <div className="px-6 py-5 flex items-start gap-4 shrink-0"
              style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <RankedAvatar name={user.full_name} role={user.role} isActive={user.is_active} size="lg" />
+          <RankedAvatar name={user.full_name} role={user.role} isActive={accountActive} size="lg" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="font-serif text-lg leading-tight" style={{ color: '#e5e7eb' }}>
                 {user.full_name}
               </h2>
-              <StatusPill isActive={user.is_active} />
+              {/* Control de cuenta global (login) -- turing.users.is_active,
+                  distinto del acceso por-aplicación (ver Users.jsx tabs, W12)
+                  y de la membresía (afiliación) de abajo. Movido aquí desde
+                  la columna "Estado" de la tabla (W12, confirmado por Henry).
+                  Pide confirmación con GlobalActionConfirmModal antes de
+                  ejecutar -- mismo patrón que el interruptor de membresía de
+                  abajo: apagar/reactivar el login es una acción de alto
+                  impacto, no debe dispararse con un solo clic accidental. */}
+              {accountBusy ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: '#4b5563' }} />
+              ) : (
+                <button type="button" onClick={() => setPendingAccountToggle(true)}
+                  title={accountActive ? 'Deshabilitar el acceso de este usuario a la plataforma (login)' : 'Reactivar el login de este usuario'}
+                  className="transition-opacity hover:opacity-80">
+                  <StatusPill isActive={accountActive} activeLabel="Cuenta activa" inactiveLabel="Cuenta deshabilitada" />
+                </button>
+              )}
               {membershipSuspended && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full"
                       style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', color: '#f59e0b' }}>
@@ -705,6 +747,22 @@ export default function UserDetailPanel({ user, token, onClose }) {
 
         <div className="absolute bottom-0 left-8 right-8 divider-gold opacity-25" />
       </motion.div>
+
+      <AnimatePresence>
+        {pendingAccountToggle && (
+          <GlobalActionConfirmModal
+            message={accountActive
+              ? `¿Deshabilitar la cuenta de ${user.full_name}? Perderá acceso de inmediato a la plataforma (no podrá iniciar sesión), aunque sus afiliaciones y accesos por aplicación se conservan intactos para cuando se reactive.`
+              : `¿Reactivar la cuenta de ${user.full_name}? Podrá volver a iniciar sesión en la plataforma con las afiliaciones y accesos que ya tenía.`}
+            confirmLabel={accountActive ? 'Deshabilitar cuenta' : 'Reactivar cuenta'}
+            onCancel={() => setPendingAccountToggle(false)}
+            onConfirm={() => {
+              setPendingAccountToggle(false)
+              handleToggleAccount()
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {pendingSuspensionAction && (

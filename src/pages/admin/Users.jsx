@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Users, UserPlus, Mail, Loader2, Search,
   Pencil, Check, X, ToggleLeft, ToggleRight, AlertTriangle,
-  ChevronLeft, ChevronRight, Eye,
+  ChevronLeft, ChevronRight, Eye, Layers, ShieldCheck, Link2Off,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { callAction } from '@/api/client'
@@ -33,46 +34,6 @@ function roleBadgeClass(role) {
   }
 }
 
-function ConfirmModal({ message, onConfirm, onCancel }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.7)' }}
-           onClick={onCancel} />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.93, y: 8 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.93, y: 8 }}
-        transition={{ duration: 0.2 }}
-        className="relative glass-card rounded-2xl p-6 w-80 space-y-4 z-10"
-        style={{ border: '1px solid rgba(212,175,55,0.18)', boxShadow: '0 0 40px rgba(212,175,55,0.08)' }}
-      >
-        {/* Glow top */}
-        <div className="absolute top-0 left-0 right-0 divider-gold opacity-50" />
-
-        <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
-               style={{ background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.25)' }}>
-            <AlertTriangle className="w-4 h-4" style={{ color: '#D4AF37' }} />
-          </div>
-          <p className="text-sm leading-relaxed" style={{ color: '#d1d5db' }}>{message}</p>
-        </div>
-        <div className="flex gap-2 justify-end pt-1">
-          <button onClick={onCancel}
-            className="px-4 py-1.5 text-sm rounded-lg transition-colors font-medium"
-            style={{ color: '#6b7280' }}
-            onMouseEnter={e => e.currentTarget.style.color = '#e5e7eb'}
-            onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}>
-            Cancelar
-          </button>
-          <button onClick={onConfirm} className="px-4 py-1.5 text-sm rounded-lg btn-danger font-medium">
-            Confirmar
-          </button>
-        </div>
-      </motion.div>
-    </div>
-  )
-}
-
 /* Stat card */
 function StatCard({ label, value, sub, variant = 'gold' }) {
   return (
@@ -88,17 +49,43 @@ function StatCard({ label, value, sub, variant = 'gold' }) {
   )
 }
 
+const ERROR_MESSAGES = {
+  NO_APPLICATION_ACCESS_FOR_USER: 'Este usuario no tiene ningún acceso registrado para esta aplicación.',
+}
+function friendlyError(message) {
+  for (const [code, text] of Object.entries(ERROR_MESSAGES)) {
+    if (message?.includes(code)) return text
+  }
+  return message
+}
+
 const PAGE_SIZE = 25
 const SEARCH_DEBOUNCE_MS = 300
 
 export default function UsersPage() {
   const { token } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // ── Catálogo de aplicaciones -> tabs (W12). La tab activa se persiste en
+  // el query param `app` (id de la aplicación) para que la vista sea
+  // navegable/recargable, siguiendo el mismo patrón de query params que ya
+  // usa useAuth.js para el token. Las tabs REEMPLAZAN la vista global de
+  // usuarios anterior -- ya no existe una tabla "sin aplicación".
+  const [applications, setApplications] = useState([])
+  const [appsLoading, setAppsLoading] = useState(true)
+  const activeAppId = searchParams.get('app') || ''
+
   const [users, setUsers] = useState([])
   const [total, setTotal] = useState(0)
-  const [memberships, setMemberships] = useState([])
+  // Todos los application_memberships (sin filtrar) -- se cruzan client-side
+  // por application_id de la tab activa para saber si el acceso de cada
+  // usuario del grupo "access" está actualmente activo o no. iam.user.list.in
+  // NO trae ese estado precalculado (solo indica que el usuario PERTENECE al
+  // grupo "access", activo o no -- ver docstring de UserPostgresRepository.
+  // list_all en turing-iam-worker).
+  const [appMemberships, setAppMemberships] = useState([])
   const [statusFilter, setStatusFilter] = useState('all')   // all | active | inactive
   const [roleFilter, setRoleFilter] = useState('all')       // all | user | analista | developer | admin | superadmin
-  const [groupBy, setGroupBy] = useState('none')            // none | tenant
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showForm, setShowForm] = useState(false)
@@ -110,8 +97,47 @@ export default function UsersPage() {
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState({ full_name: '', role: '' })
   const [updatingId, setUpdatingId] = useState(null)
-  const [confirm, setConfirm] = useState(null)
   const [selectedUser, setSelectedUser] = useState(null)   // usuario abierto en el panel de detalle
+
+  // Catálogo de aplicaciones: se carga una vez. Si la URL no trae `app` (o
+  // trae un id que ya no existe en el catálogo), se fija a la primera app
+  // disponible -- así siempre hay una tab activa válida.
+  useEffect(() => {
+    if (!token) return
+    let cancelled = false
+    async function loadApplications() {
+      try {
+        setAppsLoading(true)
+        const data = await callAction('iam.application.list.in', {}, token)
+        if (cancelled) return
+        const apps = data?.applications || []
+        setApplications(apps)
+        const current = searchParams.get('app')
+        if (apps.length > 0 && !apps.some(a => a.id === current)) {
+          setSearchParams(prev => {
+            const next = new URLSearchParams(prev)
+            next.set('app', apps[0].id)
+            return next
+          }, { replace: true })
+        }
+      } catch (e) {
+        if (!cancelled) setError(e.message)
+      } finally {
+        if (!cancelled) setAppsLoading(false)
+      }
+    }
+    loadApplications()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
+
+  function selectTab(appId) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.set('app', appId)
+      return next
+    })
+  }
 
   // Debounce de la búsqueda: solo dispara la query server-side ~300ms
   // después de que el usuario deja de teclear (evita 1 request por letra
@@ -121,32 +147,28 @@ export default function UsersPage() {
     return () => clearTimeout(t)
   }, [search])
 
-  // Cualquier cambio de filtro/búsqueda regresa a la primera página.
-  useEffect(() => { setPage(0) }, [debouncedSearch, statusFilter, roleFilter, groupBy])
+  // Cualquier cambio de filtro/búsqueda/tab regresa a la primera página.
+  useEffect(() => { setPage(0) }, [debouncedSearch, statusFilter, roleFilter, activeAppId])
 
   async function fetchUsers() {
+    if (!activeAppId) return
     try {
       setLoading(true)
-      // "Agrupar por organización" necesita cruzar TODOS los usuarios contra
-      // TODAS las membresías para armar los grupos -- en ese modo se
-      // desactiva la paginación de servidor a propósito (caso de uso
-      // distinto: vista administrativa completa, no búsqueda puntual). En
-      // el modo normal (sin agrupar, que es el que escala a miles de
-      // usuarios) SIEMPRE se pagina server-side.
-      const isGrouped = groupBy === 'tenant'
       const payload = {
+        application_id: activeAppId,
         search: debouncedSearch || undefined,
         role: roleFilter !== 'all' ? roleFilter : undefined,
         is_active: statusFilter === 'all' ? undefined : statusFilter === 'active',
-        ...(isGrouped ? {} : { limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
       }
-      const [uData, mData] = await Promise.all([
+      const [uData, amData] = await Promise.all([
         callAction('iam.user.list.in', payload, token),
-        callAction('iam.membership.list.in', {}, token),
+        callAction('iam.application_membership.list.in', {}, token),
       ])
       setUsers(uData?.users || [])
       setTotal(uData?.total ?? (uData?.users || []).length)
-      setMemberships(mData?.memberships || [])
+      setAppMemberships(amData?.application_memberships || [])
     } catch (e) {
       setError(e.message)
     } finally {
@@ -154,7 +176,10 @@ export default function UsersPage() {
     }
   }
 
-  useEffect(() => { if (token) fetchUsers() }, [token, debouncedSearch, statusFilter, roleFilter, groupBy, page])
+  useEffect(() => {
+    if (token && activeAppId) fetchUsers()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, activeAppId, debouncedSearch, statusFilter, roleFilter, page])
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -181,80 +206,40 @@ export default function UsersPage() {
     finally { setUpdatingId(null) }
   }
 
-  async function handleToggleStatus(u) {
+  // ── Estado por-aplicación (W12) — DISTINTO del control de cuenta global
+  // (login), que vive ahora en UserDetailPanel. Alterna de un jalón TODOS
+  // los application_memberships del usuario para la app de la tab activa.
+  async function handleToggleAppAccess(u) {
     try {
       setUpdatingId(u.id); setError(null)
-      if (u.is_active) {
-        await callAction('iam.user.disable.in', { user_id: u.id }, token)
-      } else {
-        await callAction('iam.user.update.in', { user_id: u.id, is_active: true }, token)
-      }
+      await callAction('iam.user.toggle_application_access.in', {
+        user_id: u.id, application_id: activeAppId,
+      }, token)
       await fetchUsers()
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError(friendlyError(e.message)) }
     finally { setUpdatingId(null) }
   }
 
-  function confirmToggle(u) {
-    setConfirm({
-      message: u.is_active
-        ? `¿Deshabilitar a ${u.full_name}? No podrá acceder al sistema.`
-        : `¿Reactivar a ${u.full_name}?`,
-      onConfirm: async () => { setConfirm(null); await handleToggleStatus(u) },
-    })
-  }
-
-  // El filtrado (búsqueda, rol, estado) ya ocurre server-side (ver
-  // fetchUsers) -- "users" que llega del backend YA es la página filtrada,
-  // no hace falta volver a filtrar en el cliente. Ver requisito de Henry:
-  // la búsqueda debe escalar a miles de usuarios sin traer la tabla
-  // completa al navegador.
+  // El filtrado (búsqueda, rol, estado, aplicación) ya ocurre server-side
+  // (ver fetchUsers) -- "users" que llega del backend YA es la página
+  // filtrada. Ver requisito de Henry: la búsqueda debe escalar a miles de
+  // usuarios sin traer la tabla completa al navegador.
   const filtered = users
   const activeCount   = users.filter(u => u.is_active).length
   const inactiveCount = users.length - activeCount
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const isPaginated = groupBy !== 'tenant'
 
-  // Organizaciones de cada usuario (vía sus membresías)
-  const userTenants = memberships.reduce((acc, m) => {
-    if (!acc[m.user_id]) acc[m.user_id] = []
-    if (!acc[m.user_id].some(t => t.id === m.tenant_id)) {
-      acc[m.user_id].push({ id: m.tenant_id, name: m.tenant_name })
-    }
-    return acc
-  }, {})
-
-  // Agrupación por organización: un usuario con N membresías aparece en N
-  // grupos; sin membresía cae en "Sin organización" (al final).
-  const tenantGroups = (() => {
-    if (groupBy !== 'tenant') return []
-    const groups = {}
-    for (const u of filtered) {
-      const tenants = userTenants[u.id] || []
-      if (tenants.length === 0) {
-        if (!groups.__none__) groups.__none__ = { label: 'Sin organización', users: [] }
-        groups.__none__.users.push(u)
-      } else {
-        for (const t of tenants) {
-          if (!groups[t.id]) groups[t.id] = { label: t.name || t.id, users: [] }
-          groups[t.id].users.push(u)
-        }
-      }
-    }
-    return Object.entries(groups)
-      .map(([key, g]) => ({ key, ...g }))
-      .sort((a, b) =>
-        (a.key === '__none__') - (b.key === '__none__') || a.label.localeCompare(b.label)
-      )
-  })()
+  // Acceso activo/inactivo de cada usuario PARA LA APP DE LA TAB ACTIVA,
+  // derivado cruzando appMemberships (misma semántica any_active que usa el
+  // backend en toggle_by_application: activo si AL MENOS uno de sus
+  // application_memberships para esta app está activo).
+  function appAccessIsActive(userId) {
+    const rows = appMemberships.filter(m => m.user_id === userId && m.application_id === activeAppId)
+    return rows.some(m => m.is_active)
+  }
 
   return (
     <div className="space-y-7">
-      <AnimatePresence>
-        {confirm && (
-          <ConfirmModal message={confirm.message} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)} />
-        )}
-      </AnimatePresence>
-
       {/* ── Header ── */}
       <motion.div initial="hidden" animate="visible" variants={fadeInUp}
         className="flex items-center justify-between">
@@ -278,16 +263,46 @@ export default function UsersPage() {
         </button>
       </motion.div>
 
+      {/* ── Tabs de aplicación (W12) — reemplazan la vista global de
+          usuarios; cada tab filtra la tabla a los usuarios relevantes para
+          esa aplicación (con acceso, o afiliados sin acceso). ── */}
+      {appsLoading ? (
+        <div className="flex items-center gap-2 py-2">
+          <Loader2 className="w-4 h-4 animate-spin" style={{ color: '#D4AF37' }} />
+          <span className="text-xs font-mono" style={{ color: '#374151' }}>Cargando aplicaciones…</span>
+        </div>
+      ) : applications.length === 0 ? (
+        <p className="text-xs font-mono" style={{ color: '#4b5563' }}>Sin aplicaciones registradas en el catálogo.</p>
+      ) : (
+        <motion.div initial="hidden" animate="visible" variants={fadeInUp}
+          className="flex items-center gap-2 flex-wrap">
+          {applications.map(app => {
+            const isActive = app.id === activeAppId
+            return (
+              <button key={app.id} onClick={() => selectTab(app.id)}
+                className="flex items-center gap-2 px-4 py-2 text-sm rounded-xl font-medium transition-all"
+                style={isActive
+                  ? { color: '#D4AF37', background: 'rgba(212,175,55,0.12)', border: '1px solid rgba(212,175,55,0.35)' }
+                  : { color: '#6b7280', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <Layers className="w-3.5 h-3.5" />
+                {app.name}
+                {!app.is_active && (
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full" style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.1)' }}>
+                    inactiva
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </motion.div>
+      )}
+
       {/* ── Stats row ── */}
-      {/* "total" viene del servidor y refleja el conteo real bajo los
-          filtros activos (no el tamaño de la página cargada) -- así el
-          admin sabe cuántos usuarios hay en total aunque solo se hayan
-          traído 25 al navegador. */}
       {!loading && total > 0 && (
         <motion.div initial="hidden" animate="visible" variants={stagger}
           className="grid grid-cols-3 gap-4">
           <motion.div variants={fadeInUp}>
-            <StatCard label="Coinciden con el filtro" value={total} sub={isPaginated ? `mostrando ${users.length} en esta página` : 'registrados en el sistema'} variant="gold" />
+            <StatCard label="Coinciden con el filtro" value={total} sub={`mostrando ${users.length} en esta página`} variant="gold" />
           </motion.div>
           <motion.div variants={fadeInUp}>
             <StatCard label="Activos (página)" value={activeCount} sub={`${Math.round(activeCount/users.length*100)||0}% de esta página`} variant="silver" />
@@ -406,22 +421,16 @@ export default function UsersPage() {
           {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
         </select>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-          title="Filtrar por estado"
+          title="Filtrar por estado de cuenta (login)"
           className="rounded-xl px-3 py-3 text-sm input-dark">
           <option value="all">Todos los estados</option>
           <option value="active">Solo activos</option>
           <option value="inactive">Solo inactivos</option>
         </select>
-        <select value={groupBy} onChange={e => setGroupBy(e.target.value)}
-          title="Agrupar"
-          className="rounded-xl px-3 py-3 text-sm input-dark">
-          <option value="none">Sin agrupar (paginado)</option>
-          <option value="tenant">Agrupar por organización</option>
-        </select>
       </motion.div>
 
       {/* ── Table ── */}
-      {loading ? (
+      {!activeAppId ? null : loading ? (
         <div className="flex flex-col items-center justify-center py-24 gap-3">
           <Loader2 className="w-6 h-6 animate-spin" style={{ color: '#D4AF37' }} />
           <span className="text-xs font-mono" style={{ color: '#374151' }}>Cargando usuarios…</span>
@@ -432,7 +441,7 @@ export default function UsersPage() {
           <p className="text-sm font-medium" style={{ color: '#4b5563' }}>
             {debouncedSearch || roleFilter !== 'all' || statusFilter !== 'all'
               ? 'Sin resultados para ese filtro'
-              : 'No hay usuarios registrados'}
+              : 'Ningún usuario tiene acceso o afiliación relevante para esta aplicación'}
           </p>
         </div>
       ) : (
@@ -452,7 +461,7 @@ export default function UsersPage() {
           <table className="w-full text-sm">
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                {['Usuario', 'Email', 'Rango', 'Rol', 'Estado', ''].map((h, i) => (
+                {['Usuario', 'Email', 'Rango', 'Rol', 'Estado en esta app', ''].map((h, i) => (
                   <th key={i}
                     className={`px-5 py-3.5 text-[10px] font-mono font-semibold uppercase tracking-[0.12em] ${i === 5 ? 'text-right' : 'text-left'}`}
                     style={{ color: '#2a2a2a' }}>
@@ -462,34 +471,15 @@ export default function UsersPage() {
               </tr>
             </thead>
             <tbody>
-              {(groupBy === 'tenant'
-                ? tenantGroups.flatMap(g => [
-                    { __group__: g },
-                    ...g.users.map(u => ({ user: u, groupKey: g.key })),
-                  ])
-                : filtered.map(u => ({ user: u }))
-              ).map((row, idx) => {
-                if (row.__group__) {
-                  return (
-                    <tr key={`group-${row.__group__.key}`}>
-                      <td colSpan={6} className="px-5 py-2.5"
-                          style={{ background: 'rgba(212,175,55,0.04)', borderBottom: '1px solid rgba(212,175,55,0.08)' }}>
-                        <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.14em]"
-                              style={{ color: '#D4AF37' }}>
-                          {row.__group__.label} · {row.__group__.users.length} usuario{row.__group__.users.length !== 1 ? 's' : ''}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                }
-                const u = row.user
-                const rowKey = row.groupKey ? `${row.groupKey}-${u.id}` : u.id
+              {filtered.map((u, idx) => {
                 const isEditing = editingId === u.id
                 const isBusy    = updatingId === u.id
                 const rank      = getRankByRole(u.role, idx)
+                const hasAccess = u.app_access_status === 'access'
+                const appActive = hasAccess ? appAccessIsActive(u.id) : false
 
                 return (
-                  <motion.tr key={rowKey} variants={fadeInUp}
+                  <motion.tr key={u.id} variants={fadeInUp}
                     onClick={() => { if (!isEditing && !isBusy) setSelectedUser(u) }}
                     className="row-hover transition-all duration-200"
                     style={{
@@ -516,11 +506,14 @@ export default function UsersPage() {
                             }}>
                               {u.full_name}
                             </span>
-                            {groupBy === 'none' && (userTenants[u.id] || []).length > 0 && (
-                              <p className="text-[10px] font-mono mt-1" style={{ color: '#4b5563' }}>
-                                {(userTenants[u.id] || []).map(t => t.name).join(' · ')}
-                              </p>
-                            )}
+                            {/* Distintivo visual del grupo (confirmado por Henry:
+                                deben verse aparte, no mezclados sin marcar). */}
+                            <p className="text-[10px] font-mono mt-1 flex items-center gap-1"
+                               style={hasAccess ? { color: '#4ade80' } : { color: '#f59e0b' }}>
+                              {hasAccess
+                                ? <><ShieldCheck className="w-3 h-3" />Con acceso</>
+                                : <><Link2Off className="w-3 h-3" />Afiliado sin acceso</>}
+                            </p>
                           </div>
                         )}
                       </div>
@@ -563,24 +556,38 @@ export default function UsersPage() {
                       )}
                     </td>
 
-                    {/* ── Estado ── */}
+                    {/* ── Estado en esta app (W12) — DISTINTO del control de
+                        cuenta global (login), que vive en el panel de
+                        detalle. Toggle real solo para el grupo "access";
+                        deshabilitado con tooltip para "affiliated_no_access"
+                        (mismo patrón visual gris + not-allowed + title que
+                        `nothingToSuspend` en UserDetailPanel). ── */}
                     <td className="px-5 py-4">
-                      <button onClick={e => { e.stopPropagation(); confirmToggle(u) }}
-                        disabled={isBusy || isEditing}
-                        className="flex items-center gap-1.5 disabled:cursor-not-allowed"
-                        title={u.is_active ? 'Deshabilitar usuario' : 'Reactivar usuario'}>
-                        {u.is_active ? (
-                          <>
-                            <ToggleRight className="w-5 h-5 toggle-on" />
-                            <span className="text-xs toggle-on font-mono">Activo</span>
-                          </>
-                        ) : (
-                          <>
-                            <ToggleLeft className="w-5 h-5 toggle-off" />
-                            <span className="text-xs toggle-off font-mono">Inactivo</span>
-                          </>
-                        )}
-                      </button>
+                      {hasAccess ? (
+                        <button onClick={e => { e.stopPropagation(); handleToggleAppAccess(u) }}
+                          disabled={isBusy || isEditing}
+                          className="flex items-center gap-1.5 disabled:cursor-not-allowed"
+                          title={appActive ? 'Desactivar acceso a esta aplicación' : 'Reactivar acceso a esta aplicación'}>
+                          {appActive ? (
+                            <>
+                              <ToggleRight className="w-5 h-5 toggle-on" />
+                              <span className="text-xs toggle-on font-mono">Activo</span>
+                            </>
+                          ) : (
+                            <>
+                              <ToggleLeft className="w-5 h-5 toggle-off" />
+                              <span className="text-xs toggle-off font-mono">Inactivo</span>
+                            </>
+                          )}
+                        </button>
+                      ) : (
+                        <span className="flex items-center gap-1.5 cursor-not-allowed"
+                          title="Este usuario está afiliado pero no tiene ningún acceso activo en esta aplicación para desactivar"
+                          style={{ color: '#374151' }}>
+                          <ToggleLeft className="w-5 h-5" style={{ color: '#374151' }} />
+                          <span className="text-xs font-mono">Sin acceso</span>
+                        </span>
+                      )}
                     </td>
 
                     {/* ── Acciones ── */}
@@ -606,7 +613,7 @@ export default function UsersPage() {
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 justify-end">
-                          <button onClick={e => { e.stopPropagation(); setSelectedUser(u) }} title="Ver detalle: afiliaciones, accesos y roles"
+                          <button onClick={e => { e.stopPropagation(); setSelectedUser(u) }} title="Ver detalle: afiliaciones, accesos, roles y cuenta global"
                             className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
                             style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#374151' }}
                             onMouseEnter={e => { e.currentTarget.style.color = '#38bdf8'; e.currentTarget.style.borderColor = 'rgba(56,189,248,0.3)'; e.currentTarget.style.background = 'rgba(56,189,248,0.08)' }}
@@ -633,12 +640,10 @@ export default function UsersPage() {
           <div className="px-6 py-3 flex items-center justify-between flex-wrap gap-3"
                style={{ borderTop: '1px solid rgba(255,255,255,0.03)', background: 'rgba(0,0,0,0.2)' }}>
             <span className="text-[10px] font-mono" style={{ color: '#2a2a2a' }}>
-              {isPaginated
-                ? `Página ${page + 1} de ${totalPages} · ${filtered.length} de ${total} coinciden`
-                : `Mostrando ${filtered.length} de ${total}`}
+              Página {page + 1} de {totalPages} · {filtered.length} de {total} coinciden
             </span>
 
-            {isPaginated && totalPages > 1 && (
+            {totalPages > 1 && (
               <div className="flex items-center gap-2">
                 <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
                   className="w-7 h-7 flex items-center justify-center rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed"
@@ -674,7 +679,7 @@ export default function UsersPage() {
       {/* ── Panel de detalle de usuario (requisito de Henry) ── */}
       <AnimatePresence>
         {selectedUser && (
-          <UserDetailPanel user={selectedUser} token={token} onClose={() => setSelectedUser(null)} />
+          <UserDetailPanel user={selectedUser} token={token} onClose={() => setSelectedUser(null)} onUserUpdated={fetchUsers} />
         )}
       </AnimatePresence>
     </div>
