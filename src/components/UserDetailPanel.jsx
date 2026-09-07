@@ -68,6 +68,50 @@ function ToggleControl({ isActive, isBusy, onToggle, activeLabel = 'Activo', ina
   )
 }
 
+/* Confirmación para el interruptor global de membresía (W11.1) — operación
+   de alto impacto (apaga/reactiva TODAS las afiliaciones y accesos de un
+   usuario de un jalón), pide confirmación antes de ejecutar. Mismo patrón
+   visual que ConfirmModal de Users.jsx, adaptado local a este panel. */
+function GlobalActionConfirmModal({ message, confirmLabel, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      <div className="absolute inset-0 backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.75)' }}
+           onClick={onCancel} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.93, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.93, y: 8 }}
+        transition={{ duration: 0.2 }}
+        className="relative glass-card rounded-2xl p-6 w-80 space-y-4 z-10"
+        style={{ border: '1px solid rgba(245,158,11,0.3)', boxShadow: '0 0 40px rgba(245,158,11,0.1)' }}
+      >
+        <div className="absolute top-0 left-0 right-0" style={{ height: 1, background: 'rgba(245,158,11,0.4)' }} />
+        <div className="flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
+               style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }}>
+            <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
+          </div>
+          <p className="text-sm leading-relaxed" style={{ color: '#d1d5db' }}>{message}</p>
+        </div>
+        <div className="flex gap-2 justify-end pt-1">
+          <button onClick={onCancel}
+            className="px-4 py-1.5 text-sm rounded-lg transition-colors font-medium"
+            style={{ color: '#6b7280' }}
+            onMouseEnter={e => e.currentTarget.style.color = '#e5e7eb'}
+            onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}>
+            Cancelar
+          </button>
+          <button onClick={onConfirm}
+            className="px-4 py-1.5 text-sm rounded-lg font-medium"
+            style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.14)', border: '1px solid rgba(245,158,11,0.4)' }}>
+            {confirmLabel}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
 /**
  * UserDetailPanel — vista de detalle Y edición de un usuario (requisito de
  * Henry, ampliado en W7b para ser completamente editable desde aquí, y en
@@ -133,6 +177,10 @@ export default function UserDetailPanel({ user, token, onClose }) {
   const [suspensionLoading, setSuspensionLoading] = useState(true)
   const [membershipSuspended, setMembershipSuspended] = useState(false)
   const [suspensionBusy, setSuspensionBusy] = useState(false)
+  // Confirmación previa (W11.1, feedback de Henry): suspender/restaurar
+  // afecta TODAS las afiliaciones y accesos del usuario de un jalón — es
+  // una operación de alto impacto, no debe dispararse con un solo clic.
+  const [pendingSuspensionAction, setPendingSuspensionAction] = useState(null) // 'suspend' | 'restore' | null
 
   async function loadDetail() {
     const [mData, aData] = await Promise.all([
@@ -356,8 +404,24 @@ export default function UserDetailPanel({ user, token, onClose }) {
   async function handleSuspendMembership() {
     try {
       setSuspensionBusy(true); setError(null)
-      await callAction('iam.user.suspend_membership.in', { user_id: user.id }, token)
-      setMembershipSuspended(true)
+      const result = await callAction('iam.user.suspend_membership.in', { user_id: user.id }, token)
+      // Bug real encontrado por Henry en QA: si el usuario no tenía NINGUNA
+      // afiliación/acceso activo, el backend responde Ok con snapshot vacío
+      // (no-op válido, ver MembershipSuspensionPostgresRepository.suspend) —
+      // eso NO crea una suspensión real, así que membership_suspension_status
+      // seguirá reportando suspended=false. Antes se asumía `true`
+      // incondicionalmente aquí, dejando el badge "Membresía suspendida"
+      // mostrado sin que exista ninguna fila en membership_suspensions
+      // (restaurar después fallaba con NO_ACTIVE_SUSPENSION). Se consulta el
+      // estado real en vez de asumirlo.
+      const suspendedCount =
+        (result?.suspended_user_memberships || 0) + (result?.suspended_application_memberships || 0)
+      if (suspendedCount === 0) {
+        setMembershipSuspended(false)
+        setError('Este usuario no tenía ninguna afiliación ni acceso activo — no hay nada que suspender.')
+      } else {
+        setMembershipSuspended(true)
+      }
       // Refleja de inmediato en las secciones de arriba que todo quedó
       // inactivo (afiliaciones + accesos), sin esperar a que el usuario
       // cierre y reabra el panel.
@@ -414,7 +478,7 @@ export default function UserDetailPanel({ user, token, onClose }) {
               {suspensionLoading ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: '#4b5563' }} />
               ) : (
-                <button type="button" onClick={membershipSuspended ? handleRestoreMembership : handleSuspendMembership}
+                <button type="button" onClick={() => setPendingSuspensionAction(membershipSuspended ? 'restore' : 'suspend')}
                   disabled={suspensionBusy}
                   title={membershipSuspended
                     ? 'Reactiva exactamente las afiliaciones y accesos que estaban activos antes del apagón global'
@@ -628,6 +692,24 @@ export default function UserDetailPanel({ user, token, onClose }) {
 
         <div className="absolute bottom-0 left-8 right-8 divider-gold opacity-25" />
       </motion.div>
+
+      <AnimatePresence>
+        {pendingSuspensionAction && (
+          <GlobalActionConfirmModal
+            message={pendingSuspensionAction === 'suspend'
+              ? `¿Suspender TODA la membresía de ${user.full_name}? Se desactivarán de un jalón todas sus afiliaciones y accesos activos. El usuario podrá seguir iniciando sesión, pero perderá acceso a todas las aplicaciones. Esta acción se puede revertir con "Restaurar membresía".`
+              : `¿Restaurar la membresía de ${user.full_name}? Se reactivarán exactamente las afiliaciones y accesos que estaban activos antes del apagón — nada que ya estuviera desactivado por otra razón se reactivará.`}
+            confirmLabel={pendingSuspensionAction === 'suspend' ? 'Suspender membresía' : 'Restaurar membresía'}
+            onCancel={() => setPendingSuspensionAction(null)}
+            onConfirm={() => {
+              const action = pendingSuspensionAction
+              setPendingSuspensionAction(null)
+              if (action === 'suspend') handleSuspendMembership()
+              else handleRestoreMembership()
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }
