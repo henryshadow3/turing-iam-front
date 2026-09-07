@@ -59,6 +59,7 @@ export default function UserAccessTree({
   applications,
   accesses,
   affiliatedTenants,
+  affiliatedTenantsForApp,
   busyId,
   // Formulario de alta de acceso (ya construido en W7b) -- se reutiliza
   // pero pre-contextualizado a la aplicación de la fila expandida.
@@ -107,6 +108,12 @@ export default function UserAccessTree({
         const isOpen = openApplicationId === app.id
         const accent = accentFor(app.slug)
         const isFormOpenHere = showAccessForm && accessForm._appId === app.id
+        // Mejora W11-4: una app sin NINGÚN acceso activo (0 accesos, o todos
+        // con is_active=false) debe distinguirse de un vistazo, sin leer el
+        // texto "sin acceso" de cada fila -- se atenúa el ícono/acento de esa
+        // fila. No toca la lógica de datos, solo el tratamiento visual del
+        // contenedor del ícono (mismo criterio que el toggle por fila).
+        const hasActiveAccess = appAccesses.some(a => a.is_active)
 
         return (
           <div key={app.id} className="rounded-xl overflow-hidden"
@@ -117,7 +124,12 @@ export default function UserAccessTree({
               className="w-full px-4 py-3 flex items-center gap-3 text-left"
               style={{ background: isOpen ? `${accent}0d` : 'rgba(255,255,255,0.015)' }}>
               <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                   style={{ background: `${accent}1a`, border: `1px solid ${accent}40` }}>
+                   style={{
+                     background: `${accent}1a`,
+                     border: `1px solid ${accent}40`,
+                     opacity: hasActiveAccess ? 1 : 0.45,
+                     transition: 'opacity 0.25s ease',
+                   }}>
                 <Layers className="w-3.5 h-3.5" style={{ color: accent }} />
               </div>
               <div className="min-w-0 flex-1">
@@ -170,28 +182,47 @@ export default function UserAccessTree({
                           onSubmit={onSubmitAccessForm}
                           className="rounded-lg p-3 space-y-2.5"
                           style={{ background: `${accent}0d`, border: `1px solid ${accent}2e` }}>
-                          <div className="grid grid-cols-2 gap-2.5">
-                            <div>
-                              <label className="block text-[9px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Tenant</label>
-                              <select required value={accessForm.tenant_id}
-                                onChange={e => setAccessForm(f => ({ ...f, tenant_id: e.target.value, tenant_application_id: '', role_id: '' }))}
-                                className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark">
-                                <option value="">Seleccionar…</option>
-                                {affiliatedTenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                              </select>
+                          {affiliatedTenantsForApp.length === 0 ? (
+                            <div className="rounded-lg px-3 py-2.5 flex items-center gap-2"
+                                 style={{ background: 'rgba(245,158,11,0.06)', border: '1px dashed rgba(245,158,11,0.3)' }}>
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0" style={{ color: '#f59e0b' }} />
+                              <span className="text-[10px] font-mono" style={{ color: '#c9a24a' }}>
+                                Ningún tenant afiliado tiene {app.name} habilitada todavía.
+                              </span>
                             </div>
-                            <div>
-                              <label className="block text-[9px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Rol de aplicación</label>
-                              <select required value={accessForm.role_id} disabled={availableRolesForAccess.length === 0}
-                                onChange={e => setAccessForm(f => ({ ...f, role_id: e.target.value }))}
-                                className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark disabled:opacity-50">
-                                <option value="">{availableRolesForAccess.length > 0 ? 'Seleccionar…' : 'Elige un tenant primero'}</option>
-                                {availableRolesForAccess.map(r => (
-                                  <option key={r.id} value={r.id}>{r.name}{r.tenant_id ? ' (custom)' : ' (catálogo)'}</option>
-                                ))}
-                              </select>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-2.5">
+                              <div>
+                                <label className="block text-[9px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Tenant</label>
+                                <select required value={accessForm.tenant_id}
+                                  onChange={e => setAccessForm(f => ({ ...f, tenant_id: e.target.value, tenant_application_id: '', role_id: '' }))}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark">
+                                  <option value="">Seleccionar…</option>
+                                  {affiliatedTenantsForApp.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-mono mb-1 uppercase tracking-wider" style={{ color: '#4b5563' }}>Rol de aplicación</label>
+                                <select required value={accessForm.role_id} disabled={availableRolesForAccess.length === 0}
+                                  onChange={e => setAccessForm(f => ({ ...f, role_id: e.target.value }))}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark disabled:opacity-50">
+                                  <option value="">
+                                    {!accessForm.tenant_id
+                                      ? 'Elige un tenant primero'
+                                      : availableRolesForAccess.length > 0
+                                        ? 'Seleccionar…'
+                                        // Bug W11-3: distingue "vacío porque no hay datos"
+                                        // (ya se eligió tenant, no hay roles de esa app ahí)
+                                        // de un control simplemente mudo/roto.
+                                        : 'Sin roles disponibles para esta aplicación en ese tenant'}
+                                  </option>
+                                  {availableRolesForAccess.map(r => (
+                                    <option key={r.id} value={r.id}>{r.name}{r.tenant_id ? ' (custom)' : ' (catálogo)'}</option>
+                                  ))}
+                                </select>
+                              </div>
                             </div>
-                          </div>
+                          )}
                           {accessForm.tenant_id && availableTenantAppsForAccess.length === 0 && (
                             <p className="text-[9px] font-mono" style={{ color: '#f59e0b' }}>
                               {app.name} no está habilitada para ese tenant.
@@ -231,7 +262,7 @@ export default function UserAccessTree({
                                   <div className="flex items-center gap-1.5 mt-1">
                                     <select value={editingRoleId} autoFocus
                                       onChange={e => setEditingRoleId(e.target.value)}
-                                      className="text-[11px] rounded px-1.5 py-0.5 input-dark">
+                                      className="flex-1 min-w-0 rounded-lg px-2.5 py-1.5 text-xs input-dark">
                                       {rolesForAccess(a).map(r => (
                                         <option key={r.id} value={r.id}>{r.name}</option>
                                       ))}

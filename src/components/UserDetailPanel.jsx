@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, Mail, Loader2, Building2, ShieldCheck, ShieldOff,
   AlertTriangle, KeyRound, Plus, ToggleLeft, ToggleRight,
+  PauseCircle, PlayCircle,
 } from 'lucide-react'
 import { callAction } from '@/api/client'
 import { RankedAvatar, getRankByRole } from '@/components/RankIcons'
@@ -26,6 +27,8 @@ const ERROR_MESSAGES = {
   ROLE_INACTIVE: 'Ese rol está desactivado y no puede asignarse.',
   ROLE_NOT_FOUND: 'El rol seleccionado ya no existe.',
   CANNOT_DISABLE_ADMIN_ROLE: 'El rol admin no puede desactivarse: dejaría a la organización sin administradores.',
+  MEMBERSHIP_ALREADY_SUSPENDED: 'Este usuario ya tiene una suspensión de membresía vigente.',
+  NO_ACTIVE_SUSPENSION: 'Este usuario no tiene ninguna suspensión de membresía vigente que restaurar.',
 }
 
 function friendlyError(message) {
@@ -121,6 +124,16 @@ export default function UserDetailPanel({ user, token, onClose }) {
   const [editingRoleId, setEditingRoleId] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
 
+  // Interruptor global de membresía (W11) — suspende/restaura de un jalón
+  // TODAS las afiliaciones y accesos activos del usuario, SIN tocar
+  // turing.users.is_active (ese es el mecanismo YA EXISTENTE que impide el
+  // login por completo; este es distinto: deja loguear pero sin ninguna
+  // afiliación/acceso de negocio activo). Ver membership_suspensions en
+  // db-turing y los 3 eventos nuevos en iam-worker.
+  const [suspensionLoading, setSuspensionLoading] = useState(true)
+  const [membershipSuspended, setMembershipSuspended] = useState(false)
+  const [suspensionBusy, setSuspensionBusy] = useState(false)
+
   async function loadDetail() {
     const [mData, aData] = await Promise.all([
       callAction('iam.membership.list.in', { user_id: user.id }, token),
@@ -128,6 +141,11 @@ export default function UserDetailPanel({ user, token, onClose }) {
     ])
     setMemberships(mData?.memberships || [])
     setAccesses(aData?.application_memberships || [])
+  }
+
+  async function loadSuspensionStatus() {
+    const sData = await callAction('iam.user.membership_suspension_status.in', { user_id: user.id }, token)
+    setMembershipSuspended(Boolean(sData?.suspended))
   }
 
   async function loadCatalogs() {
@@ -147,12 +165,21 @@ export default function UserDetailPanel({ user, token, onClose }) {
     let cancelled = false
     async function load() {
       try {
-        setLoading(true); setError(null)
+        setLoading(true); setSuspensionLoading(true); setError(null)
         await Promise.all([loadDetail(), loadCatalogs()])
       } catch (e) {
         if (!cancelled) setError(e.message)
       } finally {
         if (!cancelled) setLoading(false)
+      }
+      // Independiente del resto: si este evento nuevo falla (p.ej. gateway
+      // sin desplegar aún), no debe tumbar la carga del resto del panel.
+      try {
+        await loadSuspensionStatus()
+      } catch (e) {
+        if (!cancelled) setError(prev => prev || friendlyError(e.message))
+      } finally {
+        if (!cancelled) setSuspensionLoading(false)
       }
     }
     load()
@@ -235,6 +262,23 @@ export default function UserDetailPanel({ user, token, onClose }) {
     (!accessForm._appId || ta.application_id === accessForm._appId) &&
     (!accessForm.tenant_id || ta.tenant_id === accessForm.tenant_id)
   )
+
+  // Bug W11-1: el selector de "Tenant" del formulario de alta debe ofrecer
+  // SOLO tenants afiliados que además tengan la aplicación de la fila
+  // expandida habilitada ahí (fila activa en tenant_applications) -- antes
+  // ofrecía TODOS los tenants afiliados sin importar la app, lo que dejaba
+  // elegir p.ej. "Brilliant Therapy" desde la fila de FinFlow y solo
+  // fallaba después con TENANT_APPLICATION_INACTIVE/no habilitada. Se
+  // calcula independiente del tenant ya elegido en el form (a diferencia de
+  // `availableTenantAppsForAccess` de arriba, que sí depende de
+  // accessForm.tenant_id) para poder poblar el <select> completo.
+  const tenantAppsForCurrentApp = tenantApplications.filter(ta =>
+    ta.is_active && (!accessForm._appId || ta.application_id === accessForm._appId)
+  )
+  const tenantIdsWithCurrentAppEnabled = new Set(tenantAppsForCurrentApp.map(ta => ta.tenant_id))
+  const affiliatedTenantsForCurrentApp = affiliatedTenants.filter(t =>
+    tenantIdsWithCurrentAppEnabled.has(t.id)
+  )
   const resolvedTenantApplicationId = accessForm.tenant_id && accessForm._appId
     ? availableTenantAppsForAccess.find(ta => ta.tenant_id === accessForm.tenant_id)?.id || ''
     : ''
@@ -308,6 +352,32 @@ export default function UserDetailPanel({ user, token, onClose }) {
     finally { setSavingEdit(false) }
   }
 
+  // ── Interruptor global de membresía ──
+  async function handleSuspendMembership() {
+    try {
+      setSuspensionBusy(true); setError(null)
+      await callAction('iam.user.suspend_membership.in', { user_id: user.id }, token)
+      setMembershipSuspended(true)
+      // Refleja de inmediato en las secciones de arriba que todo quedó
+      // inactivo (afiliaciones + accesos), sin esperar a que el usuario
+      // cierre y reabra el panel.
+      await refresh()
+    } catch (e) { setError(friendlyError(e.message)) }
+    finally { setSuspensionBusy(false) }
+  }
+  async function handleRestoreMembership() {
+    try {
+      setSuspensionBusy(true); setError(null)
+      await callAction('iam.user.restore_membership.in', { user_id: user.id }, token)
+      setMembershipSuspended(false)
+      // Restaura EXACTAMENTE el snapshot previo -- puede dejar algunas filas
+      // inactivas si ya lo estaban antes del apagón global (comportamiento
+      // esperado, ver membership_suspensions).
+      await refresh()
+    } catch (e) { setError(friendlyError(e.message)) }
+    finally { setSuspensionBusy(false) }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <motion.div
@@ -335,6 +405,30 @@ export default function UserDetailPanel({ user, token, onClose }) {
                 {user.full_name}
               </h2>
               <StatusPill isActive={user.is_active} />
+              {membershipSuspended && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full"
+                      style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', color: '#f59e0b' }}>
+                  <PauseCircle className="w-3 h-3" />Membresía suspendida
+                </span>
+              )}
+              {suspensionLoading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: '#4b5563' }} />
+              ) : (
+                <button type="button" onClick={membershipSuspended ? handleRestoreMembership : handleSuspendMembership}
+                  disabled={suspensionBusy}
+                  title={membershipSuspended
+                    ? 'Reactiva exactamente las afiliaciones y accesos que estaban activos antes del apagón global'
+                    : 'Desactiva TODAS las afiliaciones y accesos activos de este usuario (no impide el login)'}
+                  className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={membershipSuspended
+                    ? { color: '#4ade80', border: '1px solid rgba(74,222,128,0.3)', background: 'rgba(74,222,128,0.08)' }
+                    : { color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', background: 'rgba(239,68,68,0.06)' }}>
+                  {suspensionBusy
+                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                    : membershipSuspended ? <PlayCircle className="w-3 h-3" /> : <PauseCircle className="w-3 h-3" />}
+                  {membershipSuspended ? 'Restaurar membresía' : 'Suspender membresía'}
+                </button>
+              )}
             </div>
             <span className="flex items-center gap-1.5 text-xs font-mono mt-1" style={{ color: '#6b7280' }}>
               <Mail className="w-3 h-3 shrink-0" />{user.email}
@@ -416,7 +510,16 @@ export default function UserDetailPanel({ user, token, onClose }) {
                           <select required value={membershipForm.role_id} disabled={!membershipForm.tenant_id}
                             onChange={e => setMembershipForm(f => ({ ...f, role_id: e.target.value }))}
                             className="w-full rounded-lg px-2.5 py-1.5 text-xs input-dark disabled:opacity-50">
-                            <option value="">{membershipForm.tenant_id ? 'Seleccionar…' : 'Elige un tenant primero'}</option>
+                            <option value="">
+                              {!membershipForm.tenant_id
+                                ? 'Elige un tenant primero'
+                                : membershipRoleOptions.length > 0
+                                  ? 'Seleccionar…'
+                                  // Bug W11-3: mismo criterio que el select de rol de
+                                  // acceso en UserAccessTree -- distingue "sin roles
+                                  // organizacionales para este tenant" de un control mudo.
+                                  : 'Sin roles organizacionales disponibles para este tenant'}
+                            </option>
                             {membershipRoleOptions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                           </select>
                         </div>
@@ -496,6 +599,7 @@ export default function UserDetailPanel({ user, token, onClose }) {
                   applications={applications}
                   accesses={accesses}
                   affiliatedTenants={affiliatedTenants}
+                  affiliatedTenantsForApp={affiliatedTenantsForCurrentApp}
                   busyId={busyId}
                   showAccessForm={showAccessForm}
                   accessForm={accessForm}

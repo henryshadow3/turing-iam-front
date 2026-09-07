@@ -17,6 +17,14 @@ const SCENARIOS = {
   multi: { memberships: mock.MEMBERSHIPS_MULTI, accesses: mock.ACCESSES_MULTI },
 }
 
+// Estado mutable en memoria SOLO para el interruptor de membresía global
+// (W11) -- a diferencia del resto de mutaciones del harness (que no
+// persisten nada porque no hace falta para verificar el árbol), este botón
+// SÍ necesita alternar visualmente entre "Suspender"/"Restaurar" para poder
+// verificarlo sin backend real. Se reinicia con cada recarga de página.
+// El query param ?suspended=1 permite arrancar ya en estado suspendido.
+let membershipSuspendedMock = new URLSearchParams(window.location.search).get('suspended') === '1'
+
 export async function callAction(event) {
   const scenario = SCENARIOS[currentScenarioKey()] || SCENARIOS.zero
   // Pequeño delay artificial para poder ver el estado "Cargando…" también.
@@ -42,6 +50,19 @@ export async function callAction(event) {
     case 'iam.application_membership.update.in':
     case 'iam.membership.toggle.in':
     case 'iam.membership.create.in':
+      return {}
+    // Interruptor de membresía global (W11) -- mock simple en memoria, sin
+    // snapshot real de filas afectadas (eso vive en membership_suspensions,
+    // solo probado contra Postgres efímero, no en este harness de solo UI).
+    case 'iam.user.membership_suspension_status.in':
+      return { suspended: membershipSuspendedMock }
+    case 'iam.user.suspend_membership.in':
+      if (membershipSuspendedMock) throw new Error('MEMBERSHIP_ALREADY_SUSPENDED')
+      membershipSuspendedMock = true
+      return {}
+    case 'iam.user.restore_membership.in':
+      if (!membershipSuspendedMock) throw new Error('NO_ACTIVE_SUSPENSION')
+      membershipSuspendedMock = false
       return {}
     default:
       console.warn('[mockClient] evento no mockeado:', event)
